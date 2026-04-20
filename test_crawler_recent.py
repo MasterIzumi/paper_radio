@@ -10,13 +10,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import config
-from crawler import fetch_recent_papers, get_recent_coverage
+from crawler import calendar_day_range, fetch_recent_papers, get_recent_coverage
 from recent_report import (
     build_daily_counts_by_category,
     build_paper_table_rows,
     parse_categories_arg,
     render_table,
     save_recent_crawl_report,
+    summarize_daily_counts,
+    weekday_cn,
 )
 
 
@@ -39,10 +41,14 @@ def main() -> None:
     now = datetime.now()
     coverage_note = ""
 
+    start_day, end_day = calendar_day_range(args.days, now=now)
+    date_range_str = f"{start_day.strftime('%Y-%m-%d')} ~ {end_day.strftime('%Y-%m-%d')}"
+
     print("=" * 80)
     print(f"arXiv 最近 {args.days} 天论文抓取测试 | {now.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"分区: {', '.join(categories)}")
     print(f"参数: days={args.days}, categories={','.join(categories)}")
+    print(f"查询日期范围：{date_range_str}（本地时间）")
     print("说明: 每日统计展示全量抓取结果；论文列表也展示本次抓取到的全量论文。")
     print("=" * 80)
 
@@ -83,6 +89,20 @@ def main() -> None:
         print("未抓到论文，请检查网络、分区配置或时间范围。")
         return
 
+    daily_counts = summarize_daily_counts(papers)
+    if daily_counts:
+        print("每日 announce 数量：")
+        total = sum(count for _, count in daily_counts)
+        for day, count in daily_counts:
+            try:
+                dt = datetime.strptime(day, "%Y-%m-%d")
+                label = f"{day} ({weekday_cn(dt)})"
+            except ValueError:
+                label = day
+            print(f"  - {label}: {count} 篇")
+        if total != len(papers):
+            print(f"  (注：有 {len(papers) - total} 篇缺少 announce 日期)")
+
     daily_headers, daily_rows = build_daily_counts_by_category(papers, args.days, categories, now=now)
     daily_table = render_table(daily_rows, headers=daily_headers)
     print("\n每日统计：")
@@ -102,6 +122,7 @@ def main() -> None:
         categories=categories,
         papers=papers,
         coverage_note=coverage_note,
+        date_range=date_range_str,
     )
     print(f"\nMarkdown 已保存至：{output_path}")
 

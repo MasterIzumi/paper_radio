@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
@@ -78,6 +78,32 @@ def weekday_cn(dt: datetime) -> str:
     return names[dt.weekday()]
 
 
+def _paper_bucket_date(paper: dict) -> str:
+    """论文入哪一天的统计格。
+
+    优先使用 arXiv recent 页面的 announce 日期（``announced_date``）；
+    没有时退回 ``published`` 字段的日期部分。
+    """
+    announced = str(paper.get("announced_date", "")).strip()
+    if announced:
+        return announced[:10]
+    return str(paper.get("published", ""))[:10]
+
+
+def summarize_daily_counts(papers: List[dict]) -> List[tuple[str, int]]:
+    """按 announce 日期聚合，返回 ``[(YYYY-MM-DD, count), ...]``，日期倒序。
+
+    供 CLI 打印日志用，独立于表格渲染。
+    """
+    buckets: dict[str, int] = {}
+    for paper in papers:
+        day = _paper_bucket_date(paper)
+        if not day:
+            continue
+        buckets[day] = buckets.get(day, 0) + 1
+    return sorted(buckets.items(), key=lambda item: item[0], reverse=True)
+
+
 def build_daily_counts_by_category(
     papers: List[dict],
     days_back: int,
@@ -88,11 +114,11 @@ def build_daily_counts_by_category(
     counts: dict[str, dict[str, int]] = {}
 
     for paper in papers:
-        published = paper.get("published", "")[:10]
-        if not published:
+        bucket_day = _paper_bucket_date(paper)
+        if not bucket_day:
             continue
 
-        day_counts = counts.setdefault(published, {})
+        day_counts = counts.setdefault(bucket_day, {})
         day_counts["_total"] = day_counts.get("_total", 0) + 1
 
         paper_categories = paper.get("categories", [])
@@ -109,12 +135,16 @@ def build_daily_counts_by_category(
         for category in matched:
             day_counts[category] = day_counts.get(category, 0) + 1
 
+    # 统计行：按实际出现过的 announce 日期倒序渲染。窗口由 crawler 负责裁剪，
+    # 这里不再做二次过滤，避免两处时区 / 日历算法不一致引发数字对不上。
     headers = ["日期", "星期", "总量", *categories]
     rows: List[List[str]] = []
-    for offset in range(days_back):
-        day = now - timedelta(days=offset)
-        day_str = day.strftime("%Y-%m-%d")
-        day_counts = counts.get(day_str, {})
+    for day_str in sorted(counts.keys(), reverse=True):
+        try:
+            day = datetime.strptime(day_str, "%Y-%m-%d")
+        except ValueError:
+            continue
+        day_counts = counts[day_str]
         row = [
             day.strftime("%m.%d"),
             weekday_cn(day),
@@ -165,11 +195,13 @@ def build_recent_crawl_markdown(
     daily_table: str,
     paper_table: str,
     coverage_note: str = "",
+    date_range: str = "",
 ) -> str:
     lines = [
         f"# arXiv Recent Crawl | {now.strftime('%Y-%m-%d %H:%M:%S')}",
         "",
-        f"- 查询范围：最近 {days_back} 个自然日",
+        f"- 查询范围：最近 {days_back} 个自然日"
+        + (f"（{date_range}）" if date_range else ""),
         f"- 分区：{', '.join(categories)}",
         f"- 论文总量：{paper_count}",
     ]
@@ -200,6 +232,7 @@ def save_recent_crawl_report(
     categories: List[str],
     papers: List[dict],
     coverage_note: str = "",
+    date_range: str = "",
 ) -> Path:
     daily_headers, daily_rows = build_daily_counts_by_category(papers, days_back, categories, now=now)
     daily_table = render_table(daily_rows, headers=daily_headers)
@@ -215,6 +248,7 @@ def save_recent_crawl_report(
         daily_table=daily_table,
         paper_table=paper_table,
         coverage_note=coverage_note,
+        date_range=date_range,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)

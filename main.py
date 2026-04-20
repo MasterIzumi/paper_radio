@@ -12,8 +12,13 @@ from dotenv import load_dotenv
 load_dotenv()  # 读取 .env 文件，必须在 import config 之前
 
 import config
-from crawler import fetch_papers
-from recent_report import parse_categories_arg, save_recent_crawl_report
+from crawler import calendar_day_range, fetch_papers
+from recent_report import (
+    parse_categories_arg,
+    save_recent_crawl_report,
+    summarize_daily_counts,
+    weekday_cn,
+)
 from ranker import enrich_top_papers_with_institutions, rank_papers
 from reporter import generate_report
 from selected_report import save_selected_report
@@ -38,9 +43,14 @@ def main():
     args = parser.parse_args()
     categories = parse_categories_arg(args.categories, config.FETCH_CATEGORIES)
 
+    now = datetime.now()
+    start_day, end_day = calendar_day_range(args.days, now=now)
+    date_range_str = f"{start_day.strftime('%Y-%m-%d')} ~ {end_day.strftime('%Y-%m-%d')}"
+
     print("=" * 60)
-    print(f"📡 Paper Radio | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"📡 Paper Radio | {now.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"   追溯 {args.days} 天内的 arXiv 新论文")
+    print(f"   查询日期范围：{date_range_str}")
     print(f"   分区: {', '.join(categories)}")
     print("=" * 60)
 
@@ -54,12 +64,27 @@ def main():
 
     print(f"     共获取 {len(papers)} 篇候选论文")
 
+    daily_counts = summarize_daily_counts(papers)
+    if daily_counts:
+        print("     每日 announce 数量：")
+        total = sum(count for _, count in daily_counts)
+        for day, count in daily_counts:
+            try:
+                dt = datetime.strptime(day, "%Y-%m-%d")
+                label = f"{day} ({weekday_cn(dt)})"
+            except ValueError:
+                label = day
+            print(f"       - {label}: {count} 篇")
+        if total != len(papers):
+            print(f"       (注：有 {len(papers) - total} 篇缺少 announce 日期)")
+
     crawl_snapshot_path = save_recent_crawl_report(
         output_dir=config.CRAWL_OUTPUT_DIR,
-        now=datetime.now(),
+        now=now,
         days_back=args.days,
         categories=categories,
         papers=papers,
+        date_range=date_range_str,
     )
     print(f"     抓取快照已保存：{crawl_snapshot_path}")
 

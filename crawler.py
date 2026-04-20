@@ -57,13 +57,24 @@ def _parse_atom_datetime(value: str) -> Optional[datetime]:
 
 
 def _calendar_day_range(days_back: int, now: Optional[datetime] = None) -> tuple[date, date]:
+    """根据本地日历计算 ``[start_day, end_day]`` 窗口。
+
+    这里故意用本地时间而非 UTC：用户说 "最近 5 天" 是按本地日历理解的，
+    而 arXiv recent 页面的 heading 也是不带时区的日期字符串，
+    两边保持一致能避免出现 "scraper 抓到了某天但统计表不显示" 的错位。
+    """
     if days_back < 1:
         raise ValueError("days_back 必须 >= 1")
 
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now()
     end_day = now.date()
     start_day = end_day - timedelta(days=days_back - 1)
     return start_day, end_day
+
+
+def calendar_day_range(days_back: int, now: Optional[datetime] = None) -> tuple[date, date]:
+    """公开版本的日历窗口计算，供上层打印/展示使用。"""
+    return _calendar_day_range(days_back, now)
 
 
 def _request_text(url: str, params: Optional[Dict[str, object]] = None) -> str:
@@ -109,6 +120,7 @@ def _extract_recent_entry(dt: Tag, dd: Tag, announced_dt: datetime, category: st
             categories = [_clean(part) for part in text.split(";") if _clean(part)]
 
     announced_str = announced_dt.strftime("%Y-%m-%dT00:00:00Z")
+    announced_day = announced_dt.strftime("%Y-%m-%d")
     return {
         "arxiv_id": arxiv_id,
         "abs_url": f"https://arxiv.org/abs/{arxiv_id}",
@@ -119,6 +131,8 @@ def _extract_recent_entry(dt: Tag, dd: Tag, announced_dt: datetime, category: st
         "affiliations": [],
         "published": announced_str,
         "updated": announced_str,
+        # arXiv recent 页面的 announce 日期（不会被 API 补全覆盖，供每日统计使用）
+        "announced_date": announced_day,
         "categories": categories,
     }
 
