@@ -22,6 +22,7 @@ from config import (
     FETCH_CATEGORIES,
 )
 from http_client import get_bytes, get_text
+from models import Paper
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,9 @@ def _request_api(params: Dict[str, object]) -> bytes:
         raise RuntimeError(f"arXiv API 请求失败：{exc}") from exc
 
 
-def _extract_recent_entry(dt: Tag, dd: Tag, announced_dt: datetime, category: str) -> Optional[Dict]:
+def _extract_recent_entry(
+    dt: Tag, dd: Tag, announced_dt: datetime, category: str
+) -> Optional[Paper]:
     abs_link = dt.find("a", href=lambda href: href and "/abs/" in href)
     if not abs_link:
         return None
@@ -119,31 +122,22 @@ def _extract_recent_entry(dt: Tag, dd: Tag, announced_dt: datetime, category: st
         if text:
             categories = [_clean(part) for part in text.split(";") if _clean(part)]
 
-    announced_str = announced_dt.strftime("%Y-%m-%dT00:00:00Z")
-    announced_day = announced_dt.strftime("%Y-%m-%d")
-    return {
-        "arxiv_id": arxiv_id,
-        "abs_url": f"https://arxiv.org/abs/{arxiv_id}",
-        "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}",
-        "title": title,
-        "abstract": "",
-        "authors": authors,
-        "affiliations": [],
-        "published": announced_str,
-        "updated": announced_str,
-        # arXiv recent 页面的 announce 日期（不会被 API 补全覆盖，供每日统计使用）
-        "announced_date": announced_day,
-        "categories": categories,
-    }
+    return Paper.from_recent_entry(
+        arxiv_id=arxiv_id,
+        title=title,
+        authors=authors,
+        categories=categories,
+        announced_at=announced_dt,
+    )
 
 
-def _scrape_recent_category(category: str, days_back: int) -> List[Dict]:
+def _scrape_recent_category(category: str, days_back: int) -> List[Paper]:
     url = ARXIV_RECENT.format(category=category)
     html = _request_text(url, params={"show": RECENT_SHOW_ALL})
     soup = BeautifulSoup(html, "html.parser")
 
     start_day, _ = _calendar_day_range(days_back)
-    papers: List[Dict] = []
+    papers: List[Paper] = []
 
     for heading in soup.find_all("h3"):
         announced_dt = _parse_recent_heading(heading.get_text(" ", strip=True))
@@ -188,15 +182,14 @@ def _get_recent_oldest_day(category: str) -> Optional[date]:
     return oldest
 
 
-def _parse_feed(xml_bytes: bytes) -> List[Dict]:
+def _parse_feed(xml_bytes: bytes) -> List[Paper]:
     root = ET.fromstring(xml_bytes)
-    papers: List[Dict] = []
+    papers: List[Paper] = []
 
     for entry in root.findall(f"{{{ATOM}}}entry"):
         id_url = (entry.findtext(f"{{{ATOM}}}id") or "").strip()
         arxiv_id = re.sub(r"v\d+$", "", id_url.split("/")[-1])
         title = _clean(entry.findtext(f"{{{ATOM}}}title") or "")
-        abstract = _clean(entry.findtext(f"{{{ATOM}}}summary") or "")
         if not arxiv_id or not title:
             continue
 
@@ -216,26 +209,26 @@ def _parse_feed(xml_bytes: bytes) -> List[Dict]:
             if category.get("term")
         ]
 
-        papers.append(
+        paper = Paper.from_atom_entry(
             {
                 "arxiv_id": arxiv_id,
-                "abs_url": f"https://arxiv.org/abs/{arxiv_id}",
-                "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}",
                 "title": title,
-                "abstract": abstract,
+                "abstract": _clean(entry.findtext(f"{{{ATOM}}}summary") or ""),
                 "authors": authors,
                 "affiliations": affiliations,
+                "categories": categories,
                 "published": (entry.findtext(f"{{{ATOM}}}published") or "").strip(),
                 "updated": (entry.findtext(f"{{{ATOM}}}updated") or "").strip(),
-                "categories": categories,
             }
         )
+        if paper is not None:
+            papers.append(paper)
 
     return papers
 
 
-def _fetch_metadata_by_ids(ids: List[str], batch_size: int = 50) -> Dict[str, Dict]:
-    enriched: Dict[str, Dict] = {}
+def _fetch_metadata_by_ids(ids: List[str], batch_size: int = 50) -> Dict[str, Paper]:
+    enriched: Dict[str, Paper] = {}
     total_batches = (len(ids) + batch_size - 1) // batch_size
 
     for start in range(0, len(ids), batch_size):
@@ -248,7 +241,7 @@ def _fetch_metadata_by_ids(ids: List[str], batch_size: int = 50) -> Dict[str, Di
         params = {"id_list": ",".join(chunk), "max_results": len(chunk)}
         xml_bytes = _request_api(params)
         for paper in _parse_feed(xml_bytes):
-            enriched[paper["arxiv_id"]] = paper
+            enriched[paper.arxiv_id] = paper
 
         if start + batch_size < len(ids):
             time.sleep(3)
@@ -256,60 +249,44 @@ def _fetch_metadata_by_ids(ids: List[str], batch_size: int = 50) -> Dict[str, Di
     return enriched
 
 
-def fetch_paper_by_id(arxiv_id: str) -> Optional[Dict]:
+def fetch_paper_by_id(arxiv_id: str) -> Optional[Paper]:
     """按 arXiv ID 获取单篇论文元信息。"""
-    arxiv_id = re.sub(r"v\d+$", "", (arxiv_id or "").strip())
-    if not arxiv_id:
+    normalized = re.sub(r"v\d+$", "", (arxiv_id or "").strip())
+    if not normalized:
         return None
 
     try:
-        enriched_by_id = _fetch_metadata_by_ids([arxiv_id], batch_size=1)
+        enriched_by_id = _fetch_metadata_by_ids([normalized], batch_size=1)
     except Exception as exc:
         raise RuntimeError(f"按 ID 获取论文失败：{exc}") from exc
 
-    return enriched_by_id.get(arxiv_id)
+    return enriched_by_id.get(normalized)
 
 
-def _merge_paper_non_empty(existing: Dict, incoming: Dict) -> Dict:
-    """将 ``incoming`` 合并进 ``existing``，但仅当 incoming 字段非空时才覆盖。
-
-    解决问题：同一篇论文从两个分区被抓到时，第二次的空 abstract / authors
-    不应该覆盖第一次已经拿到的值。
-    """
-    merged = dict(existing)
-    for key, value in incoming.items():
-        # None / 空串 / 空列表 一律视作“没有新值”
-        if value in (None, "", [], {}):
-            continue
-        merged[key] = value
-    return merged
-
-
-def _dedupe_papers(papers: List[Dict]) -> List[Dict]:
-    seen: Dict[str, Dict] = {}
+def _dedupe_papers(papers: List[Paper]) -> List[Paper]:
+    seen: Dict[str, Paper] = {}
     for paper in papers:
-        arxiv_id = paper.get("arxiv_id")
-        if not arxiv_id:
+        if not paper.arxiv_id:
             continue
-        existing = seen.get(arxiv_id)
+        existing = seen.get(paper.arxiv_id)
         if existing is None:
-            seen[arxiv_id] = paper
+            seen[paper.arxiv_id] = paper
         else:
-            seen[arxiv_id] = _merge_paper_non_empty(existing, paper)
-
+            seen[paper.arxiv_id] = existing.merge_non_empty(paper)
     return list(seen.values())
 
 
-def _sort_papers_by_published_desc(papers: List[Dict]) -> List[Dict]:
-    def key(paper: Dict) -> datetime:
-        dt = _parse_atom_datetime(paper.get("published", ""))
-        return dt or datetime.min.replace(tzinfo=timezone.utc)
+def _sort_papers_by_published_desc(papers: List[Paper]) -> List[Paper]:
+    _MIN_DT = datetime.min.replace(tzinfo=timezone.utc)
+
+    def key(paper: Paper) -> datetime:
+        return paper.published or _MIN_DT
 
     return sorted(papers, key=key, reverse=True)
 
 
-def _enrich_papers_with_api_metadata(papers: List[Dict]) -> List[Dict]:
-    ids = [paper["arxiv_id"] for paper in papers if paper.get("arxiv_id")]
+def _enrich_papers_with_api_metadata(papers: List[Paper]) -> List[Paper]:
+    ids = [paper.arxiv_id for paper in papers if paper.arxiv_id]
     if not ids:
         return papers
 
@@ -320,10 +297,15 @@ def _enrich_papers_with_api_metadata(papers: List[Dict]) -> List[Dict]:
         print(f"  ⚠️  元数据补全失败，继续使用页面抓取结果：{exc}")
         return papers
 
-    merged: List[Dict] = []
+    merged: List[Paper] = []
     for paper in papers:
-        aid = paper["arxiv_id"]
-        merged.append({**paper, **enriched_by_id.get(aid, {})})
+        from_api = enriched_by_id.get(paper.arxiv_id)
+        if from_api is None:
+            merged.append(paper)
+            continue
+        # API 补全提供 abstract / 真实 published / 详细 authors 等，
+        # 用 non-empty 合并策略：不会覆盖 recent 页面已有的 announced_date 等。
+        merged.append(paper.merge_non_empty(from_api))
 
     return merged
 
@@ -333,13 +315,13 @@ def fetch_recent_papers(
     categories: Optional[List[str]] = None,
     max_results: Optional[int] = ARXIV_MAX_RESULTS,
     enrich_metadata: bool = False,
-) -> List[Dict]:
+) -> List[Paper]:
     """抓取最近 N 天的论文。"""
     if days_back < 1:
         raise ValueError("days_back 必须 >= 1")
 
     categories = categories or FETCH_CATEGORIES
-    all_papers: List[Dict] = []
+    all_papers: List[Paper] = []
 
     print(f"  → 查询分区：{', '.join(categories)}")
     print(f"  → 时间范围：最近 {days_back} 天")
@@ -365,7 +347,7 @@ def fetch_recent_papers(
 def fetch_papers(
     days_back: int = DAYS_BACK,
     categories: Optional[List[str]] = None,
-) -> List[Dict]:
+) -> List[Paper]:
     """主流程入口：先抓 recent 页面，再尽量补全元数据。"""
     return fetch_recent_papers(
         days_back=days_back,

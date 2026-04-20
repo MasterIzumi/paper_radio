@@ -39,10 +39,14 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 MODEL = os.getenv("LLM_MODEL", "")
 
 # ── 深度分析配置 ──────────────────────────────────────────────────────────────
-DEEP_ANALYSIS_MAX_PAPERS = int(os.getenv("DEEP_ANALYSIS_MAX_PAPERS", "5"))
-DEEP_ANALYSIS_MIN_TOTAL_SCORE = int(os.getenv("DEEP_ANALYSIS_MIN_TOTAL_SCORE", "20"))
+# 排名只用 relevance + novelty 两个 0-10 维度，总分上限 20。阈值 14 相当于 70%。
+DEEP_ANALYSIS_MAX_PAPERS = int(os.getenv("DEEP_ANALYSIS_MAX_PAPERS", "3"))
+DEEP_ANALYSIS_MIN_TOTAL_SCORE = int(os.getenv("DEEP_ANALYSIS_MIN_TOTAL_SCORE", "14"))
+# 评分显示用的总分上限（相关性 0-10 + 新颖性 0-10）。
+TOTAL_SCORE_MAX = 20
 
 # ── 输出配置 ──────────────────────────────────────────────────────────────────
 OUTPUT_DIR = Path("reports")
 CRAWL_OUTPUT_DIR = OUTPUT_DIR / "recent_crawls"
 SELECTED_OUTPUT_DIR = OUTPUT_DIR / "selected_papers"
+ 

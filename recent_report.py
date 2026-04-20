@@ -6,20 +6,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
+from formatting import (
+    arxiv_sort_key,
+    clip,
+    escape_md_cell,
+    fmt_authors,
+    weekday_cn,
+)
+from models import Paper
+
 
 def parse_categories_arg(raw: str, default_categories: Sequence[str]) -> List[str]:
     categories = [item.strip() for item in raw.split(",") if item.strip()]
     return categories or list(default_categories)
-
-
-def fmt_authors(authors: List[str], max_authors: int = 4) -> str:
-    if not authors:
-        return "Unknown"
-
-    head = ", ".join(authors[:max_authors])
-    if len(authors) > max_authors:
-        return f"{head} et al."
-    return head
 
 
 def fmt_subjects(subjects: List[str], max_subjects: int = 3) -> str:
@@ -38,26 +37,6 @@ def fmt_subjects(subjects: List[str], max_subjects: int = 3) -> str:
     return text
 
 
-def clip(text: str, width: int) -> str:
-    if len(text) <= width:
-        return text
-    if width <= 1:
-        return text[:width]
-    return text[: width - 1] + "…"
-
-
-def escape_md_cell(value: object) -> str:
-    """转义 Markdown 表格单元格，避免 ``|`` / 换行破坏表格结构。"""
-    if value is None:
-        return ""
-    text = str(value)
-    # 换行会撕开表格，先压成空格
-    text = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-    # 管道符统一转义
-    text = text.replace("|", "\\|")
-    return text
-
-
 def render_table(rows: Iterable[List[str]], headers: List[str]) -> str:
     escaped_headers = [escape_md_cell(h) for h in headers]
     escaped_rows = [[escape_md_cell(cell) for cell in row] for row in rows]
@@ -73,31 +52,16 @@ def render_table(rows: Iterable[List[str]], headers: List[str]) -> str:
     return "\n".join(lines)
 
 
-def weekday_cn(dt: datetime) -> str:
-    names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-    return names[dt.weekday()]
+def _bucket_date(paper: Paper) -> str:
+    """按 announce 日期分桶，没有时退回 published 日期字符串。"""
+    return paper.announced_day
 
 
-def _paper_bucket_date(paper: dict) -> str:
-    """论文入哪一天的统计格。
-
-    优先使用 arXiv recent 页面的 announce 日期（``announced_date``）；
-    没有时退回 ``published`` 字段的日期部分。
-    """
-    announced = str(paper.get("announced_date", "")).strip()
-    if announced:
-        return announced[:10]
-    return str(paper.get("published", ""))[:10]
-
-
-def summarize_daily_counts(papers: List[dict]) -> List[tuple[str, int]]:
-    """按 announce 日期聚合，返回 ``[(YYYY-MM-DD, count), ...]``，日期倒序。
-
-    供 CLI 打印日志用，独立于表格渲染。
-    """
+def summarize_daily_counts(papers: Iterable[Paper]) -> List[tuple[str, int]]:
+    """按 announce 日期聚合 ``(YYYY-MM-DD, count)``，日期倒序。"""
     buckets: dict[str, int] = {}
     for paper in papers:
-        day = _paper_bucket_date(paper)
+        day = _bucket_date(paper)
         if not day:
             continue
         buckets[day] = buckets.get(day, 0) + 1
@@ -105,7 +69,7 @@ def summarize_daily_counts(papers: List[dict]) -> List[tuple[str, int]]:
 
 
 def build_daily_counts_by_category(
-    papers: List[dict],
+    papers: List[Paper],
     days_back: int,
     categories: List[str],
     now: datetime | None = None,
@@ -114,17 +78,16 @@ def build_daily_counts_by_category(
     counts: dict[str, dict[str, int]] = {}
 
     for paper in papers:
-        bucket_day = _paper_bucket_date(paper)
+        bucket_day = _bucket_date(paper)
         if not bucket_day:
             continue
 
         day_counts = counts.setdefault(bucket_day, {})
         day_counts["_total"] = day_counts.get("_total", 0) + 1
 
-        paper_categories = paper.get("categories", [])
-        matched = set()
+        matched: set[str] = set()
         for configured in categories:
-            for value in paper_categories:
+            for value in paper.categories:
                 if configured in value:
                     matched.add(configured)
                     break
@@ -156,28 +119,19 @@ def build_daily_counts_by_category(
     return headers, rows
 
 
-def arxiv_sort_key(paper: dict) -> tuple[int, str]:
-    arxiv_id = paper.get("arxiv_id", "")
-    numeric = arxiv_id.replace(".", "")
-    try:
-        return (0, f"{int(numeric):020d}")
-    except ValueError:
-        return (1, arxiv_id)
-
-
-def build_paper_table_rows(papers: List[dict]) -> List[List[str]]:
+def build_paper_table_rows(papers: List[Paper]) -> List[List[str]]:
     sorted_papers = sorted(papers, key=arxiv_sort_key, reverse=True)
     rows: List[List[str]] = []
     for index, paper in enumerate(sorted_papers, 1):
         rows.append(
             [
                 str(index),
-                paper.get("arxiv_id", ""),
-                paper.get("title", ""),
-                clip(fmt_authors(paper.get("authors", [])), 38),
-                clip(fmt_subjects(paper.get("categories", [])), 42),
-                paper.get("abs_url", "") or f"https://arxiv.org/abs/{paper.get('arxiv_id', '')}",
-                paper.get("published", "")[:10] or "N/A",
+                paper.arxiv_id,
+                paper.title,
+                clip(fmt_authors(paper.authors), 38),
+                clip(fmt_subjects(paper.categories), 42),
+                paper.primary_url,
+                paper.published_day or "N/A",
             ]
         )
     return rows
@@ -230,7 +184,7 @@ def save_recent_crawl_report(
     now: datetime,
     days_back: int,
     categories: List[str],
-    papers: List[dict],
+    papers: List[Paper],
     coverage_note: str = "",
     date_range: str = "",
 ) -> Path:

@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from crawler import fetch_paper_by_id
+from models import RankedPaper
 from pdf_context import fetch_pdf_first_page_context
 from ranker import infer_paper_institutions
 
@@ -37,40 +38,46 @@ def main() -> None:
         print(f"\n获取论文失败：{exc}")
         return
 
-    if not paper:
+    if paper is None:
         print("\n未找到对应论文，请检查 arXiv paper id 是否正确。")
         return
 
     print("\n[1/2] 已获取论文元信息")
-    print(f"Title: {paper.get('title', 'N/A')}")
-    print(f"Authors: {_fmt_list(paper.get('authors', []), fallback='Unknown')}")
-    print(f"Raw Affiliations: {_fmt_list(paper.get('affiliations', []))}")
-    print(f"URL: {paper.get('abs_url', '')}")
+    print(f"Title: {paper.title or 'N/A'}")
+    print(f"Authors: {_fmt_list(paper.authors, fallback='Unknown')}")
+    print(f"Raw Affiliations: {_fmt_list(paper.affiliations)}")
+    print(f"URL: {paper.abs_url}")
 
-    pdf_context = fetch_pdf_first_page_context(
-        args.paper_id,
-        pdf_url=paper.get("pdf_url", ""),
-    )
+    pdf_context = fetch_pdf_first_page_context(paper.arxiv_id, pdf_url=paper.pdf_url)
+    ranked = RankedPaper.from_paper(paper)
     if pdf_context:
         print(f"PDF First Page Context: {pdf_context}")
-        paper = {**paper, "pdf_first_page_context": pdf_context}
+        ranked = ranked.with_institutions(
+            raw_affiliations=paper.affiliations,
+            merged_affiliations=paper.affiliations,
+            pdf_first_page_context=pdf_context,
+        )
     else:
         print("PDF First Page Context: N/A")
 
     print("\n[2/2] 正在进行机构归一与推断...")
     try:
-        enriched = infer_paper_institutions(paper)
+        enriched = infer_paper_institutions(ranked)
     except Exception as exc:
         print(f"\n机构推断失败：{exc}")
         return
 
+    if enriched is None:
+        print("\n推断未返回结果。")
+        return
+
     print("\n推断结果：")
-    print(f"- paper_id: {enriched.get('arxiv_id', '')}")
-    print(f"- institution_types: {enriched.get('institution_types', 'unknown')}")
-    print(f"- evidence_source: {enriched.get('institution_evidence_source', 'unknown')}")
-    print(f"- normalized_institutions: {_fmt_list(enriched.get('normalized_institutions', []))}")
-    print(f"- institution_summary: {enriched.get('institution_summary', 'N/A') or 'N/A'}")
-    print(f"- merged_affiliations: {_fmt_list(enriched.get('affiliations', []))}")
+    print(f"- paper_id: {enriched.arxiv_id}")
+    print(f"- institution_types: {enriched.institution_types}")
+    print(f"- evidence_source: {enriched.institution_evidence_source}")
+    print(f"- normalized_institutions: {_fmt_list(enriched.normalized_institutions)}")
+    print(f"- institution_summary: {enriched.institution_summary or 'N/A'}")
+    print(f"- merged_affiliations: {_fmt_list(enriched.affiliations)}")
 
 
 if __name__ == "__main__":

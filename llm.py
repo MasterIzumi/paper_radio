@@ -46,6 +46,12 @@ def _get_settings():
     return provider, api_key, base_url, model
 
 
+def get_active_model() -> str:
+    """返回当前实际会用的模型名（供展示 / 报告用）。"""
+    _, _, _, model = _get_settings()
+    return model
+
+
 def chat(
     messages: list,
     max_tokens: int = 4000,

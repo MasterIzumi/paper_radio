@@ -1,87 +1,44 @@
 """生成每日 Markdown 报告"""
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Dict, List
+from typing import List
 
 from config import (
     DEEP_ANALYSIS_MAX_PAPERS,
     DEEP_ANALYSIS_MIN_TOTAL_SCORE,
     LLM_PROVIDER,
+    TOTAL_SCORE_MAX,
 )
+from formatting import escape_md_cell, fmt_affiliations, fmt_authors
 from fulltext import fetch_sections
 from llm import chat
-from recent_report import escape_md_cell
+from models import RankedPaper
 
 
-def _fmt_authors(paper: Dict) -> str:
-    authors = paper.get("authors", [])
-    if not authors:
-        return "Unknown"
-    base = ", ".join(authors[:4])
-    return base + " et al." if len(authors) > 4 else base
-
-
-def _fmt_affiliations(paper: Dict) -> str:
-    normalized = paper.get("normalized_institutions", [])
-    if normalized:
-        base = "; ".join(str(item).strip() for item in normalized[:3] if str(item).strip())
-        if len(normalized) > 3:
-            return base + " ..."
-        if base:
-            return base
-
-    affiliations = paper.get("affiliations", [])
-    if not affiliations:
-        return "N/A"
-
-    deduped = []
-    for affiliation in affiliations:
-        if affiliation and affiliation not in deduped:
-            deduped.append(affiliation)
-
-    base = "; ".join(deduped[:3])
-    return base + " ..." if len(deduped) > 3 else base
-
-
-def _pub_date(paper: Dict) -> str:
-    pub = paper.get("published", "")
-    return pub[:10] if pub else "N/A"
-
-
-def _score_value(paper: Dict, field: str) -> int:
-    value = paper.get(field, 0)
-    try:
-        return int(round(float(value)))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _select_deep_analysis_papers(ranked_papers: List[Dict]) -> List[Dict]:
+def _select_deep_analysis_papers(ranked_papers: List[RankedPaper]) -> List[RankedPaper]:
     eligible = [
-        paper for paper in ranked_papers
-        if _score_value(paper, "total_score") >= DEEP_ANALYSIS_MIN_TOTAL_SCORE
+        paper for paper in ranked_papers if paper.total_score >= DEEP_ANALYSIS_MIN_TOTAL_SCORE
     ]
     return eligible[:DEEP_ANALYSIS_MAX_PAPERS]
 
 
-def _deep_analysis(paper: Dict) -> str:
+def _deep_analysis(paper: RankedPaper) -> str:
     """为单篇论文生成深度分析，优先使用正文，降级到摘要。"""
-    arxiv_id = paper.get("arxiv_id", "")
-
-    # 尝试抓正文
-    fulltext = fetch_sections(arxiv_id)
+    fulltext = fetch_sections(paper.arxiv_id)
     if fulltext:
         content_label = "正文节选（Introduction / Method）"
         content_body = fulltext
     else:
         content_label = "摘要（未找到 HTML 全文）"
-        content_body = paper.get("abstract", "")
+        content_body = paper.abstract
 
     prompt = f"""你是 AI 领域的资深研究员，以犀利的学术眼光著称。请深度分析以下论文。
 
-**标题**: {paper.get('title', '')}
-**作者**: {_fmt_authors(paper)}
-**机构**: {_fmt_affiliations(paper)}
-**方向**: {paper.get('topic_category', '')}
+**标题**: {paper.title}
+**作者**: {fmt_authors(paper.authors)}
+**机构**: {fmt_affiliations(paper)}
+**方向**: {paper.topic_category}
 **{content_label}**:
 {content_body}
 
@@ -96,7 +53,7 @@ def _deep_analysis(paper: Dict) -> str:
 #### 影响力预测
 （1 句）判断该工作对领域的潜在影响力与实际价值。"""
 
-    use_thinking = (LLM_PROVIDER == "anthropic")
+    use_thinking = LLM_PROVIDER == "anthropic"
     return chat(
         [{"role": "user", "content": prompt}],
         max_tokens=6000,
@@ -104,15 +61,14 @@ def _deep_analysis(paper: Dict) -> str:
     ).strip()
 
 
-def generate_report(ranked_papers: List[Dict]) -> str:
+def generate_report(ranked_papers: List[RankedPaper]) -> str:
     """生成完整的每日 Markdown 报告。"""
     today_str = datetime.now().strftime("%Y年%m月%d日")
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines: List[str] = []
 
-    # 用哪个模型
-    from llm import _get_settings
-    _, _, _, active_model = _get_settings()
+    from llm import get_active_model  # noqa: WPS433 — 避免循环导入
+    active_model = get_active_model()
 
     lines += [
         f"# 📡 每日论文摘要 | {today_str}",
@@ -135,40 +91,32 @@ def generate_report(ranked_papers: List[Dict]) -> str:
         "| # | 标题 | 机构 | 方向 | 综合分 | 一句话总结 |",
         "|---|------|------|------|--------|-----------|",
     ]
-    for p in ranked_papers[:10]:
-        title   = escape_md_cell(p.get("title", "N/A"))
-        url     = p.get("abs_url") or f"https://arxiv.org/abs/{p.get('arxiv_id','')}"
-        affs    = escape_md_cell(_fmt_affiliations(p))
-        topic   = escape_md_cell(p.get("topic_category", "—"))
-        score   = escape_md_cell(p.get("total_score", "—"))
-        summary = escape_md_cell(p.get("one_line_summary", "—"))
-        rank    = escape_md_cell(p.get("rank", "—"))
-        lines.append(f"| {rank} | [{title}]({url}) | {affs} | {topic} | {score}/30 | {summary} |")
+    for paper in ranked_papers[:10]:
+        title = escape_md_cell(paper.title or "N/A")
+        url = paper.primary_url
+        affs = escape_md_cell(fmt_affiliations(paper))
+        topic = escape_md_cell(paper.topic_category or "—")
+        score = escape_md_cell(paper.total_score)
+        summary = escape_md_cell(paper.one_line_summary or "—")
+        rank = escape_md_cell(paper.rank or "—")
+        lines.append(
+            f"| {rank} | [{title}]({url}) | {affs} | {topic} | {score}/{TOTAL_SCORE_MAX} | {summary} |"
+        )
 
     lines += ["", "---", ""]
 
     # ── TOP 10 详细卡片 ───────────────────────────────────────────────────────
     lines += ["## 📋 TOP 10 论文列表", ""]
-    for i, p in enumerate(ranked_papers[:10], 1):
-        title   = p.get("title", "N/A")
-        url     = p.get("abs_url") or f"https://arxiv.org/abs/{p.get('arxiv_id','')}"
-        aid     = p.get("arxiv_id", "")
-        authors = _fmt_authors(p)
-        topic   = p.get("topic_category", "—")
-        pub     = _pub_date(p)
-        rel     = p.get("relevance_score", "—")
-        nov     = p.get("novelty_score", "—")
-        summary = p.get("one_line_summary", "—")
-
+    for i, paper in enumerate(ranked_papers[:10], 1):
         lines += [
-            f"### {i}. {title}",
+            f"### {i}. {paper.title or 'N/A'}",
             "",
-            f"- **arXiv**: [{aid}]({url})",
-            f"- **作者**: {authors}",
-            f"- **机构**: {_fmt_affiliations(p)}",
-            f"- **方向**: {topic} | **提交**: {pub}",
-            f"- **评分**: 相关性 {rel} · 新颖性 {nov}",
-            f"- **摘要**: {summary}",
+            f"- **arXiv**: [{paper.arxiv_id}]({paper.primary_url})",
+            f"- **作者**: {fmt_authors(paper.authors)}",
+            f"- **机构**: {fmt_affiliations(paper)}",
+            f"- **方向**: {paper.topic_category or '—'} | **提交**: {paper.published_day or 'N/A'}",
+            f"- **评分**: 相关性 {paper.relevance_score} · 新颖性 {paper.novelty_score}",
+            f"- **摘要**: {paper.one_line_summary or '—'}",
             "",
         ]
 
@@ -189,18 +137,11 @@ def generate_report(ranked_papers: List[Dict]) -> str:
     ]
 
     if not deep_analysis_papers:
-        lines += [
-            "今日没有达到精读阈值的论文，因此不生成深度分析。",
-            "",
-        ]
+        lines += ["今日没有达到精读阈值的论文，因此不生成深度分析。", ""]
 
     for i, paper in enumerate(deep_analysis_papers, 1):
-        title   = paper.get("title", "N/A")
-        url     = paper.get("abs_url") or f"https://arxiv.org/abs/{paper.get('arxiv_id','')}"
-        aid     = paper.get("arxiv_id", "")
-        authors = _fmt_authors(paper)
-        topic   = paper.get("topic_category", "—")
-        pub     = _pub_date(paper)
+        title = paper.title or "N/A"
+        url = paper.primary_url
 
         print(f"  → 生成第 {i} 篇深度分析：{title[:60]}...")
         analysis = _deep_analysis(paper)
@@ -210,10 +151,10 @@ def generate_report(ranked_papers: List[Dict]) -> str:
             "",
             "| | |",
             "|---|---|",
-            f"| **arXiv** | [{aid}]({url}) |",
-            f"| **作者** | {authors} |",
-            f"| **方向** | {topic} |",
-            f"| **提交** | {pub} |",
+            f"| **arXiv** | [{paper.arxiv_id}]({url}) |",
+            f"| **作者** | {fmt_authors(paper.authors)} |",
+            f"| **方向** | {paper.topic_category or '—'} |",
+            f"| **提交** | {paper.published_day or 'N/A'} |",
             "",
             analysis,
             "",

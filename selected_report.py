@@ -6,53 +6,47 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from recent_report import arxiv_sort_key, clip, fmt_authors, render_table
+from formatting import arxiv_sort_key, clip, fmt_authors
+from models import RankedPaper
+from recent_report import render_table
 
 
-def _score_value(paper: dict) -> float:
-    value = paper.get("total_score", 0)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _ranked_sort_key(paper: dict) -> tuple[float, tuple[int, str]]:
-    return (_score_value(paper), arxiv_sort_key(paper))
+def _ranked_sort_key(paper: RankedPaper) -> tuple[int, tuple[int, str]]:
+    return (paper.total_score, arxiv_sort_key(paper))
 
 
 def build_selected_filename(now: datetime) -> str:
     return f"selected_papers_{now.strftime('%Y-%m-%d')}.md"
 
 
-def build_selected_summary_table(ranked_papers: List[dict]) -> str:
-    counter = Counter((paper.get("topic_category") or "未分类") for paper in ranked_papers)
+def build_selected_summary_table(ranked_papers: List[RankedPaper]) -> str:
+    counter = Counter((paper.topic_category or "未分类") for paper in ranked_papers)
     rows = [[topic, str(count)] for topic, count in counter.most_common()]
     return render_table(rows, headers=["方向", "数量"])
 
 
-def build_selected_paper_rows(ranked_papers: List[dict]) -> List[List[str]]:
+def build_selected_paper_rows(ranked_papers: List[RankedPaper]) -> List[List[str]]:
     sorted_papers = sorted(ranked_papers, key=_ranked_sort_key, reverse=True)
     rows: List[List[str]] = []
     for index, paper in enumerate(sorted_papers, 1):
         rows.append(
             [
                 str(index),
-                paper.get("arxiv_id", ""),
-                paper.get("title", ""),
-                paper.get("topic_category", "未分类"),
-                str(paper.get("total_score", "0")),
-                str(paper.get("relevance_score", "0")),
-                str(paper.get("novelty_score", "0")),
-                paper.get("one_line_summary", ""),
-                clip(fmt_authors(paper.get("authors", [])), 38),
-                paper.get("abs_url", "") or f"https://arxiv.org/abs/{paper.get('arxiv_id', '')}",
+                paper.arxiv_id,
+                paper.title,
+                paper.topic_category or "未分类",
+                str(paper.total_score),
+                str(paper.relevance_score),
+                str(paper.novelty_score),
+                paper.one_line_summary,
+                clip(fmt_authors(paper.authors), 38),
+                paper.primary_url,
             ]
         )
     return rows
 
 
-def build_selected_markdown(now: datetime, ranked_papers: List[dict]) -> str:
+def build_selected_markdown(now: datetime, ranked_papers: List[RankedPaper]) -> str:
     summary_table = build_selected_summary_table(ranked_papers)
     paper_table = render_table(
         build_selected_paper_rows(ranked_papers),
@@ -87,7 +81,9 @@ def build_selected_markdown(now: datetime, ranked_papers: List[dict]) -> str:
     return "\n".join(lines)
 
 
-def save_selected_report(output_dir: Path, now: datetime, ranked_papers: List[dict]) -> Path:
+def save_selected_report(
+    output_dir: Path, now: datetime, ranked_papers: List[RankedPaper]
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / build_selected_filename(now)
     content = build_selected_markdown(now, ranked_papers)

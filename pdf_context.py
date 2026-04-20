@@ -9,7 +9,7 @@ from http_client import get_bytes
 
 logger = logging.getLogger(__name__)
 
-PDF_CONTEXT_MAX_CHARS = 5000
+PDF_CONTEXT_MAX_CHARS = 8000
 ARXIV_PDF = "https://arxiv.org/pdf/{arxiv_id}.pdf"
 
 
@@ -19,6 +19,12 @@ def _clean_lines(text: str) -> list[str]:
 
 
 def _extract_pdf_first_page_block(text: str) -> str:
+    """返回整页文本（行级去多余空白、连续空行压缩、字符数封顶）。
+
+    之前只保留头 40 行 + 尾 20 行，容易丢掉中部 footnote / affiliation 标注
+    （比如两列排版里机构写在作者块和正文之间，或者被 pypdf 切成很多短行）。
+    现在保留全页，靠 LLM 自己挑重要片段，只做体积裁剪。
+    """
     if not text:
         return ""
 
@@ -26,15 +32,7 @@ def _extract_pdf_first_page_block(text: str) -> str:
     if not lines:
         return ""
 
-    top_lines = lines[:40]
-    bottom_lines = lines[-20:] if len(lines) > 20 else []
-
-    merged_lines: list[str] = []
-    for line in top_lines + bottom_lines:
-        if line not in merged_lines:
-            merged_lines.append(line)
-
-    joined = "\n".join(merged_lines)
+    joined = "\n".join(lines)
     joined = re.sub(r"\n{3,}", "\n\n", joined).strip()
     return joined[:PDF_CONTEXT_MAX_CHARS]
 
