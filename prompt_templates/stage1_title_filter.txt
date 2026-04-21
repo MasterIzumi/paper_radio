@@ -1,0 +1,10 @@
+你是 AI 与自动驾驶领域专家。以下是 arXiv 最新论文标题列表，请快速筛选出与以下方向相关的论文：
+
+${topics_of_interest}
+
+## 论文标题列表
+${title_lines}
+
+## 输出要求
+只返回 JSON，格式为 relevant_ids 字段包含相关论文 arxiv_id 的数组，不要任何解释文字。
+宁可多选，不要漏掉相关论文，约选 ${stage1_keep} 篇。

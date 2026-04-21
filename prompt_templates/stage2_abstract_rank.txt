@@ -1,0 +1,15 @@
+你是 AI 与自动驾驶领域的顶级研究专家，请对以下候选论文进行精细排名。
+
+## 关注的研究方向
+${topics_of_interest}
+
+## 评分维度（各 0-10 分）
+- **relevance_score**：与上述方向的相关程度
+- **novelty_score**：方法新颖性与贡献潜力
+- **total_score**：上述两个维度之和（0-${total_score_max}），作为最终排序依据
+
+## 候选论文
+${paper_blocks}
+
+## 输出要求
+只返回 JSON，包含 top_papers 数组，每项字段：rank、arxiv_id、relevance_score（0-10）、novelty_score（0-10）、total_score（relevance_score + novelty_score，0-${total_score_max}）、topic_category、one_line_summary（中文一句话总结）。不要任何解释文字，选出 TOP ${top_n} 篇。

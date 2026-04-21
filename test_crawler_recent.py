@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import config
+from logging_config import setup_logging
 from crawler import calendar_day_range, fetch_recent_papers, get_recent_coverage
 from recent_report import (
     build_daily_counts_by_category,
@@ -23,6 +24,8 @@ from recent_report import (
 
 
 def main() -> None:
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="测试 arXiv 最近 N 天论文抓取")
     parser.add_argument(
         "--days",

@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from crawler import fetch_paper_by_id
+from logging_config import setup_logging
 from models import RankedPaper
 from pdf_context import fetch_pdf_first_page_context
 from ranker import infer_paper_institutions
@@ -20,6 +21,8 @@ def _fmt_list(values: list[str], fallback: str = "N/A") -> str:
 
 
 def main() -> None:
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="测试 arXiv 论文机构推断")
     parser.add_argument(
         "--paper-id",

@@ -234,9 +234,9 @@ def _fetch_metadata_by_ids(ids: List[str], batch_size: int = 50) -> Dict[str, Pa
     for start in range(0, len(ids), batch_size):
         chunk = ids[start : start + batch_size]
         batch_index = start // batch_size + 1
-        print(
-            f"  → API 元数据补全批次 {batch_index}/{total_batches}"
-            f"（本批 {len(chunk)} 篇）..."
+        logger.info(
+            "API 元数据补全批次 %d/%d（本批 %d 篇）...",
+            batch_index, total_batches, len(chunk),
         )
         params = {"id_list": ",".join(chunk), "max_results": len(chunk)}
         xml_bytes = _request_api(params)
@@ -291,10 +291,10 @@ def _enrich_papers_with_api_metadata(papers: List[Paper]) -> List[Paper]:
         return papers
 
     try:
-        print(f"  → 开始用 arXiv API 补全 {len(ids)} 篇论文的元数据...")
+        logger.info("开始用 arXiv API 补全 %d 篇论文的元数据...", len(ids))
         enriched_by_id = _fetch_metadata_by_ids(ids)
     except Exception as exc:
-        print(f"  ⚠️  元数据补全失败，继续使用页面抓取结果：{exc}")
+        logger.warning("元数据补全失败，继续使用页面抓取结果：%s", exc)
         return papers
 
     merged: List[Paper] = []
@@ -323,13 +323,13 @@ def fetch_recent_papers(
     categories = categories or FETCH_CATEGORIES
     all_papers: List[Paper] = []
 
-    print(f"  → 查询分区：{', '.join(categories)}")
-    print(f"  → 时间范围：最近 {days_back} 天")
+    logger.info("查询分区：%s", ", ".join(categories))
+    logger.info("时间范围：最近 %d 天", days_back)
 
     for category in categories:
-        print(f"  → 抓取 {category} recent 页面...")
+        logger.info("抓取 %s recent 页面...", category)
         papers = _scrape_recent_category(category, days_back=days_back)
-        print(f"     获取 {len(papers)} 篇")
+        logger.info("%s 获取 %d 篇", category, len(papers))
         all_papers.extend(papers)
         time.sleep(1)
 
@@ -340,7 +340,7 @@ def fetch_recent_papers(
     if enrich_metadata:
         limited = _enrich_papers_with_api_metadata(limited)
 
-    print(f"  ✅ 共获取 {len(limited)} 篇论文")
+    logger.info("共获取 %d 篇论文", len(limited))
     return limited
 
 

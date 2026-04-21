@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()  # 读取 .env 文件，必须在 import config 之前
 
 import config
+from logging_config import setup_logging
 from crawler import calendar_day_range, fetch_papers
 from recent_report import (
     parse_categories_arg,
@@ -25,6 +26,8 @@ from selected_report import save_selected_report
 
 
 def main():
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="每日 arXiv 论文摘要生成器")
     parser.add_argument(
         "--days", type=int, default=config.DAYS_BACK,

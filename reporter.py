@@ -1,9 +1,11 @@
 """生成每日 Markdown 报告"""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import List
 
+import prompts
 from config import (
     DEEP_ANALYSIS_MAX_PAPERS,
     DEEP_ANALYSIS_MIN_TOTAL_SCORE,
@@ -12,8 +14,10 @@ from config import (
 )
 from formatting import escape_md_cell, fmt_affiliations, fmt_authors
 from fulltext import fetch_sections
-from llm import chat
+from llm import chat, get_active_model
 from models import RankedPaper
+
+logger = logging.getLogger(__name__)
 
 
 def _select_deep_analysis_papers(ranked_papers: List[RankedPaper]) -> List[RankedPaper]:
@@ -33,31 +37,22 @@ def _deep_analysis(paper: RankedPaper) -> str:
         content_label = "摘要（未找到 HTML 全文）"
         content_body = paper.abstract
 
-    prompt = f"""你是 AI 领域的资深研究员，以犀利的学术眼光著称。请深度分析以下论文。
-
-**标题**: {paper.title}
-**作者**: {fmt_authors(paper.authors)}
-**机构**: {fmt_affiliations(paper)}
-**方向**: {paper.topic_category}
-**{content_label}**:
-{content_body}
-
-请用中文输出以下三部分（直接输出 Markdown，不加额外标题层级）：
-
-#### 方法介绍
-（3-4 句）清晰介绍核心方法和技术创新点，需提及具体的模块/架构设计。
-
-#### 贡献锐评
-（2-3 句）批判性评价其 contribution——指出真正的技术亮点，同时不留情面地点出潜在局限、实验不足或过度夸大之处。
-
-#### 影响力预测
-（1 句）判断该工作对领域的潜在影响力与实际价值。"""
+    prompt = prompts.render(
+        "deep_analysis",
+        title=paper.title,
+        authors=fmt_authors(paper.authors),
+        affiliations=fmt_affiliations(paper),
+        topic_category=paper.topic_category,
+        content_label=content_label,
+        content_body=content_body,
+    )
 
     use_thinking = LLM_PROVIDER == "anthropic"
     return chat(
         [{"role": "user", "content": prompt}],
         max_tokens=6000,
         thinking=use_thinking,
+        label="deep_analysis",
     ).strip()
 
 
@@ -67,7 +62,6 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines: List[str] = []
 
-    from llm import get_active_model  # noqa: WPS433 — 避免循环导入
     active_model = get_active_model()
 
     lines += [
@@ -143,7 +137,7 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
         title = paper.title or "N/A"
         url = paper.primary_url
 
-        print(f"  → 生成第 {i} 篇深度分析：{title[:60]}...")
+        logger.info("生成第 %d 篇深度分析：%s", i, title[:60])
         analysis = _deep_analysis(paper)
 
         lines += [

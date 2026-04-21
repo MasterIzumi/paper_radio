@@ -1,18 +1,22 @@
 """使用 LLM 对论文进行筛选与排序。"""
 from __future__ import annotations
 
-import json
+import logging
 import re
 from typing import Dict, List, Optional
 
-from config import MAX_PAPERS_TO_RANK, TOPICS_OF_INTEREST
+import prompts
+from config import MAX_PAPERS_TO_RANK, TOPICS_OF_INTEREST, TOTAL_SCORE_MAX
 from formatting import fmt_affiliations, fmt_authors
-from llm import chat
+from llm import chat, extract_json
 from models import Paper, RankedPaper
 from pdf_context import fetch_pdf_first_page_context
 
+logger = logging.getLogger(__name__)
+
 # 第一阶段：仅凭标题快速过滤，保留候选数量
 STAGE1_KEEP = 30
+TOP_N = 10
 PREFILTER_KEYWORDS = [
     "autonomous driving", "driving", "driverless", "end-to-end", "e2e",
     "world model", "world models", "video prediction", "occupancy",
@@ -25,49 +29,6 @@ PREFILTER_KEYWORDS = [
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
-
-
-def _extract_json(text: str) -> dict:
-    """尽力从 LLM 输出中抠出 JSON 对象。
-
-    策略：
-    1. 先剥掉 ``` / ```json 等 code fence，尝试直接 ``json.loads``。
-    2. 如果顶层是 array，则包装成 ``{"items": [...]}``，方便调用方统一访问。
-    3. 否则回退到“找首个 { 到末尾 }”的宽松抠取。
-    """
-    if not text:
-        raise ValueError("空响应")
-
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
-
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
-        data = None
-
-    if data is None:
-        start = cleaned.find("{")
-        end = cleaned.rfind("}") + 1
-        if start == -1 or end == 0:
-            arr_start = cleaned.find("[")
-            arr_end = cleaned.rfind("]") + 1
-            if arr_start != -1 and arr_end > arr_start:
-                try:
-                    arr = json.loads(cleaned[arr_start:arr_end])
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"无法解析 JSON：{exc}") from exc
-                return {"items": arr} if isinstance(arr, list) else {}
-            raise ValueError("找不到 JSON 对象")
-        try:
-            data = json.loads(cleaned[start:end])
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"JSON 解析失败：{exc}") from exc
-
-    if isinstance(data, list):
-        return {"items": data}
-    if not isinstance(data, dict):
-        raise ValueError(f"期望 JSON object，实际得到 {type(data).__name__}")
-    return data
 
 
 def _default_summary(paper: Paper) -> str:
@@ -101,10 +62,13 @@ def _rule_prefilter(papers: List[Paper]) -> List[Paper]:
 
     if not result:
         fallback = papers[: min(STAGE1_KEEP * 2, len(papers))]
-        print(f"  规则预筛未命中，回退保留前 {len(fallback)} 篇进入标题粗筛")
+        logger.info("规则预筛未命中，回退保留前 %d 篇进入标题粗筛", len(fallback))
         return fallback
 
-    print(f"  规则预筛：{min(len(papers), MAX_PAPERS_TO_RANK)} → {len(result)} 篇")
+    logger.info(
+        "规则预筛：%d → %d 篇",
+        min(len(papers), MAX_PAPERS_TO_RANK), len(result),
+    )
     return result
 
 
@@ -118,27 +82,31 @@ def _stage1_filter(papers: List[Paper]) -> List[Paper]:
         for i, p in enumerate(papers[:MAX_PAPERS_TO_RANK], 1)
     )
 
-    prompt = f"""你是 AI 与自动驾驶领域专家。以下是 arXiv 最新论文标题列表，请快速筛选出与以下方向相关的论文：
-
-{TOPICS_OF_INTEREST}
-
-## 论文标题列表
-{title_lines}
-
-    ## 输出要求
-只返回 JSON，格式为 relevant_ids 字段包含相关论文 arxiv_id 的数组，不要任何解释文字。
-宁可多选，不要漏掉相关论文，约选 {STAGE1_KEEP} 篇。"""
+    prompt = prompts.render(
+        "stage1_title_filter",
+        topics_of_interest=TOPICS_OF_INTEREST,
+        title_lines=title_lines,
+        stage1_keep=STAGE1_KEEP,
+    )
 
     try:
-        print(f"  阶段1/3 标题粗筛：向 LLM 发送 {len(papers)} 篇标题...")
-        raw = chat([{"role": "user", "content": prompt}], max_tokens=16000)
-        data = _extract_json(raw)
-        ids = set(data.get("relevant_ids", []))
+        logger.info("阶段1/3 标题粗筛：向 LLM 发送 %d 篇标题...", len(papers))
+        raw = chat(
+            [{"role": "user", "content": prompt}],
+            max_tokens=16000,
+            label="stage1_title_filter",
+        )
+        data = extract_json(raw, list_roots=("relevant_ids",))
+        ids = set(data.get("relevant_ids") or data.get("items") or [])
         result = [p for p in papers if p.arxiv_id in ids]
-        print(f"  阶段1/3 标题粗筛完成：{len(papers)} → {len(result)} 篇候选")
+        logger.info(
+            "阶段1/3 标题粗筛完成：%d → %d 篇候选", len(papers), len(result)
+        )
         return result if result else papers[:STAGE1_KEEP]
     except Exception as exc:
-        print(f"  ⚠️  阶段1/3 标题粗筛失败（{exc}），直接取前 {STAGE1_KEEP} 篇")
+        logger.warning(
+            "阶段1/3 标题粗筛失败（%s），直接取前 %d 篇", exc, STAGE1_KEEP
+        )
         return papers[:STAGE1_KEEP]
 
 
@@ -152,10 +120,10 @@ def _stage_infer_institutions(
     if not papers:
         return []
 
-    paper_blocks = []
+    paper_blocks_list = []
     for index, paper in enumerate(papers, 1):
         pdf_context = (paper.pdf_first_page_context or "").strip()
-        paper_blocks.append(
+        paper_blocks_list.append(
             f"[{index}] ID:{paper.arxiv_id}\n"
             f"Title: {paper.title}\n"
             f"Authors: {fmt_authors(paper.authors)}\n"
@@ -163,39 +131,26 @@ def _stage_infer_institutions(
             f"PDF First Page Context: {pdf_context or 'N/A'}\n"
         )
 
-    prompt = f"""你是学术机构识别助手。请根据下面每篇论文的作者和 arXiv API 提供的原始 affiliations，
-以及补充提供的 PDF 首页文本，将机构信息归一到“学校 / 公司 / 研究机构”名称层级，供后续论文打分使用。
-
-## 任务要求
-1. 只能基于输入中给出的 Raw Affiliations、PDF First Page Context 做归纳，不要臆造未提供的机构。
-2. 机构粒度到学校、公司、研究机构名称即可，不要保留学院、系、实验室层级。
-3. 如果原始 affiliations 太少或没有，明确写 unknown。
-4. 输出字段：
-   - arxiv_id
-   - normalized_institutions: 机构名称数组，尽量去重、规范化
-   - institution_types: 从 university / company / research_lab / mixed / unknown 中选择一个最合适的标签
-   - institution_summary: 一句中文简述，概括这篇论文的机构背景
-   - evidence_source: 从 api / pdf / api+pdf / unknown 中选择，表示本次判断主要依据
-
-## 关注方向
-{TOPICS_OF_INTEREST}
-
-## 候选论文
-{chr(10).join(paper_blocks)}
-
-## 输出要求
-只返回 JSON，格式为 analyses 数组，不要任何解释文字。"""
+    prompt = prompts.render(
+        "institution_inference",
+        topics_of_interest=TOPICS_OF_INTEREST,
+        paper_blocks="\n".join(paper_blocks_list),
+    )
 
     try:
-        print(f"  {stage_label}：正在归一 {len(papers)} 篇论文的机构信息...")
-        raw = chat([{"role": "user", "content": prompt}], max_tokens=8000)
-        data = _extract_json(raw)
+        logger.info("%s：正在归一 %d 篇论文的机构信息...", stage_label, len(papers))
+        raw = chat(
+            [{"role": "user", "content": prompt}],
+            max_tokens=8000,
+            label="institution_inference",
+        )
+        data = extract_json(raw, list_roots=("analyses",))
     except Exception as exc:
-        print(f"  ⚠️  {stage_label}失败（{exc}），继续使用原始 affiliations")
+        logger.warning("%s失败（%s），继续使用原始 affiliations", stage_label, exc)
         return papers
 
     analyses_by_id: Dict[str, Dict] = {}
-    for item in data.get("analyses", []) or data.get("items", []):
+    for item in data.get("analyses") or data.get("items") or []:
         if isinstance(item, dict):
             arxiv_id = str(item.get("arxiv_id", ""))
             if arxiv_id:
@@ -231,7 +186,10 @@ def _stage_infer_institutions(
     matched = sum(
         1 for paper in enriched if paper.institution_summary or paper.normalized_institutions
     )
-    print(f"  {stage_label}完成：{matched}/{len(enriched)} 篇成功补充机构摘要")
+    logger.info(
+        "%s完成：%d/%d 篇成功补充机构摘要",
+        stage_label, matched, len(enriched),
+    )
     return enriched
 
 
@@ -264,10 +222,15 @@ def enrich_top_papers_with_institutions(
     if not top_slice:
         return ranked_papers
 
-    print(f"     正在为 TOP {len(top_slice)} 论文补充机构信息（PDF 首页推断）...")
+    logger.info(
+        "正在为 TOP %d 论文补充机构信息（PDF 首页推断）...", len(top_slice)
+    )
     prepared: List[RankedPaper] = []
     for index, paper in enumerate(top_slice, 1):
-        print(f"       - 抽取第 {index}/{len(top_slice)} 篇 PDF 首页：{paper.arxiv_id}")
+        logger.info(
+            "抽取第 %d/%d 篇 PDF 首页：%s",
+            index, len(top_slice), paper.arxiv_id,
+        )
         prepared.append(
             paper.with_institutions(
                 raw_affiliations=paper.raw_affiliations,
@@ -317,44 +280,46 @@ def _normalize_ranked_papers(papers: List[RankedPaper]) -> List[RankedPaper]:
 
 
 def _stage2_rank(papers: List[Paper]) -> List[RankedPaper]:
-    """对候选论文发送完整摘要，打分排出 TOP 10。"""
-    paper_blocks = []
+    """对候选论文发送完整摘要，打分排出 TOP N。"""
+    paper_blocks_list = []
     for i, paper in enumerate(papers, 1):
-        paper_blocks.append(
+        paper_blocks_list.append(
             f"[{i}] ID:{paper.arxiv_id}\n"
             f"Title: {paper.title}\n"
             f"Authors: {fmt_authors(paper.authors)}\n"
             f"Abstract: {paper.abstract[:500]}\n"
         )
-    paper_list_text = "\n".join(paper_blocks)
 
-    prompt = f"""你是 AI 与自动驾驶领域的顶级研究专家，请对以下候选论文进行精细排名。
+    prompt = prompts.render(
+        "stage2_abstract_rank",
+        topics_of_interest=TOPICS_OF_INTEREST,
+        paper_blocks="\n".join(paper_blocks_list),
+        total_score_max=TOTAL_SCORE_MAX,
+        top_n=TOP_N,
+    )
 
-## 关注的研究方向
-{TOPICS_OF_INTEREST}
-
-## 评分维度（各 0-10 分）
-- **relevance_score**：与上述方向的相关程度
-- **novelty_score**：方法新颖性与贡献潜力
-- **total_score**：上述两个维度之和（0-20），作为最终排序依据
-
-## 候选论文
-{paper_list_text}
-
-## 输出要求
-只返回 JSON，包含 top_papers 数组，每项字段：rank、arxiv_id、relevance_score（0-10）、novelty_score（0-10）、total_score（relevance_score + novelty_score，0-20）、topic_category、one_line_summary（中文一句话总结）。不要任何解释文字，选出 TOP 10。"""
 
     try:
-        print(f"  阶段3/3 摘要精排：正在综合评估 {len(papers)} 篇候选论文...")
-        raw = chat([{"role": "user", "content": prompt}], max_tokens=8000)
-        data = _extract_json(raw)
+        logger.info(
+            "阶段3/3 摘要精排：正在综合评估 %d 篇候选论文...", len(papers),
+        )
+        raw = chat(
+            [{"role": "user", "content": prompt}],
+            max_tokens=8000,
+            label="stage2_abstract_rank",
+        )
+        data = extract_json(raw, list_roots=("top_papers",))
     except Exception as exc:
-        print(f"  ⚠️  阶段3/3 摘要精排失败（{exc}），回退到候选前 10 篇")
-        return _normalize_ranked_papers([RankedPaper.from_paper(p) for p in papers[:10]])
+        logger.warning(
+            "阶段3/3 摘要精排失败（%s），回退到候选前 %d 篇", exc, TOP_N,
+        )
+        return _normalize_ranked_papers(
+            [RankedPaper.from_paper(p) for p in papers[:TOP_N]]
+        )
 
     papers_by_id = {paper.arxiv_id: paper for paper in papers}
     result: List[RankedPaper] = []
-    for meta in data.get("top_papers", []) or data.get("items", []):
+    for meta in data.get("top_papers") or data.get("items") or []:
         if not isinstance(meta, dict):
             continue
         aid = str(meta.get("arxiv_id", ""))
@@ -373,10 +338,14 @@ def _stage2_rank(papers: List[Paper]) -> List[RankedPaper]:
         )
 
     if not result:
-        print("  ⚠️  未匹配到论文 ID，回退到候选前 10 篇")
-        return _normalize_ranked_papers([RankedPaper.from_paper(p) for p in papers[:10]])
+        logger.warning("未匹配到论文 ID，回退到候选前 %d 篇", TOP_N)
+        return _normalize_ranked_papers(
+            [RankedPaper.from_paper(p) for p in papers[:TOP_N]]
+        )
 
-    print(f"  阶段3/3 摘要精排完成：{len(papers)} → TOP {len(result)} 篇")
+    logger.info(
+        "阶段3/3 摘要精排完成：%d → TOP %d 篇", len(papers), len(result),
+    )
     return _normalize_ranked_papers(result)
 
 
@@ -388,8 +357,8 @@ def rank_papers(papers: List[Paper]) -> List[RankedPaper]:
     if not papers:
         return []
 
-    print(f"  输入 {len(papers)} 篇论文，开始两阶段筛选...")
+    logger.info("输入 %d 篇论文，开始两阶段筛选...", len(papers))
     prefiltered = _rule_prefilter(papers)
     candidates = _stage1_filter(prefiltered)
-    print(f"  进入摘要精排的候选数：{len(candidates)} 篇")
+    logger.info("进入摘要精排的候选数：%d 篇", len(candidates))
     return _stage2_rank(candidates)
