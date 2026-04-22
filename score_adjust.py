@@ -1,18 +1,18 @@
-"""stage2 之后的评分叠加：featured authors 加分、顶会录用加分、黑名单关键词降权。
+"""stage2 之后的评分叠加：featured authors 加分、顶会录用加分。
 
 这一层独立于 LLM 调用，纯规则 + 正则，适合:
 
-- 继续扩充其它降权 / 加分规则，不污染 LLM prompt
-- 让 `selected_papers` 快照能展示"为什么加分/降分"（``bonus_reasons``）
+- 继续扩充其它加分规则，不污染 LLM prompt
+- 让 `selected_papers` 快照能展示"为什么加分"（``bonus_reasons``）
 - 保证 LLM 端口本身的语义不变（``relevance_score`` / ``novelty_score`` 不动）
 
 总分公式：
 
-    total_score = clamp(relevance + novelty + min(author + venue, BONUS_BUDGET) - penalty,
+    total_score = clamp(relevance + novelty + min(author + venue, BONUS_BUDGET),
                         0, TOTAL_SCORE_MAX)
 
-顺序：先算 author_bonus 和 venue_bonus，把两者之和卡进 BONUS_BUDGET；再减 penalty；
-最后整批重排 rank。
+注：``RankedPaper.penalty`` 字段保留为扩展点，目前恒为 0 —— 黑名单关键词已改为
+在 ``ranker._rule_prefilter`` 阶段硬剔除，不再在此处降权。
 """
 from __future__ import annotations
 
@@ -24,12 +24,9 @@ from typing import Iterable, List, Tuple
 from config import (
     AUTHOR_BONUS_CAP,
     AUTHOR_BONUS_PER_HIT,
-    BLACKLIST_KEYWORDS,
     BONUS_BUDGET,
     FEATURED_AUTHORS,
     FEATURED_VENUES,
-    PENALTY_CAP,
-    PENALTY_PER_HIT,
     TOTAL_SCORE_MAX,
     VENUE_BONUS,
 )
@@ -132,46 +129,6 @@ def _build_venue_patterns(venues: Iterable[str]) -> List[Tuple[str, re.Pattern, 
 _VENUE_PATTERNS = _build_venue_patterns(FEATURED_VENUES)
 
 
-# ── 主题黑名单关键词降权 ─────────────────────────────────────────────────────
-
-
-def _build_keyword_pattern(keyword: str) -> re.Pattern:
-    """把一个黑名单关键词编成 word-boundary + 词间 \\s+ 弹性 + 可选复数 s 的正则。
-
-    - ``UAV`` → ``\\bUAVs?\\b``：同时命中 UAV / UAVs，但不误伤 UAV2 / UAVNet
-    - ``V2X`` → ``\\bV2Xs?\\b``：命中 V2X / V2X-based，但不匹配 xV2X / V2XNet
-    - ``Drone Racing`` → ``\\bDrone\\s+Racings?\\b``：允许中间多个空格
-    """
-    words = [w for w in keyword.split() if w]
-    if not words:
-        raise ValueError("empty blacklist keyword")
-    core = r"\s+".join(re.escape(w) for w in words)
-    return re.compile(rf"\b{core}s?\b", re.IGNORECASE)
-
-
-_KEYWORD_PATTERNS: List[Tuple[str, re.Pattern]] = [
-    (kw, _build_keyword_pattern(kw)) for kw in BLACKLIST_KEYWORDS if kw
-]
-
-
-def _match_blacklist_keywords(paper: RankedPaper) -> List[str]:
-    """扫 title + abstract，返回命中的关键词（按配置顺序，不重复）。"""
-    haystack_parts: List[str] = []
-    if paper.title:
-        haystack_parts.append(paper.title)
-    if paper.abstract:
-        haystack_parts.append(paper.abstract)
-    if not haystack_parts:
-        return []
-    haystack = " \n ".join(haystack_parts)
-
-    hits: List[str] = []
-    for keyword, pattern in _KEYWORD_PATTERNS:
-        if pattern.search(haystack):
-            hits.append(keyword)
-    return hits
-
-
 def _match_venues(comments: str) -> List[str]:
     """从 comments 抽出命中的顶会名单。
 
@@ -200,7 +157,11 @@ def _match_venues(comments: str) -> List[str]:
 
 
 def _compute_adjustments(paper: RankedPaper) -> Tuple[int, int, int, List[str]]:
-    """返回 (author_bonus, venue_bonus, penalty, bonus_reasons) 四元组。"""
+    """返回 (author_bonus, venue_bonus, penalty, bonus_reasons) 四元组。
+
+    ``penalty`` 目前恒为 0（字段保留作扩展点），黑名单关键词已在规则预筛阶段
+    硬剔除，不再在此处降权。
+    """
     reasons: List[str] = []
 
     # ── author bonus ──
@@ -231,18 +192,7 @@ def _compute_adjustments(paper: RankedPaper) -> Tuple[int, int, int, List[str]]:
             venue_bonus = 0
             author_bonus = max(0, author_bonus - overflow)
 
-    # ── 主题黑名单关键词降权（不受 BONUS_BUDGET 限制，独立累加 + 封顶）──
-    blacklist_hits = _match_blacklist_keywords(paper)
-    raw_penalty = PENALTY_PER_HIT * len(blacklist_hits)
-    penalty = min(raw_penalty, PENALTY_CAP)
-    if blacklist_hits:
-        reasons.append(
-            f"blacklist keyword: {', '.join(blacklist_hits)} -{penalty}"
-        )
-    if raw_penalty > PENALTY_CAP:
-        reasons.append(f"(penalty 封顶 {PENALTY_CAP}，原始 {raw_penalty})")
-
-    return author_bonus, venue_bonus, penalty, reasons
+    return author_bonus, venue_bonus, 0, reasons
 
 
 def _rerank_by_total(papers: List[RankedPaper]) -> List[RankedPaper]:
@@ -276,15 +226,13 @@ def apply_score_adjustments(papers: List[RankedPaper]) -> List[RankedPaper]:
         return []
 
     adjusted: List[RankedPaper] = []
-    author_hits = venue_hits = penalty_hits = capped = 0
+    author_hits = venue_hits = capped = 0
     for paper in papers:
         a, v, pen, reasons = _compute_adjustments(paper)
         if a > 0:
             author_hits += 1
         if v > 0:
             venue_hits += 1
-        if pen > 0:
-            penalty_hits += 1
         if any(r.startswith("(") for r in reasons):
             capped += 1
         adjusted.append(
@@ -299,9 +247,8 @@ def apply_score_adjustments(papers: List[RankedPaper]) -> List[RankedPaper]:
 
     reranked = _rerank_by_total(adjusted)
     logger.info(
-        "评分叠加：%d 篇中 %d 篇命中 featured author，%d 篇命中顶会，"
-        "%d 篇命中黑名单关键词，%d 篇触发封顶",
-        len(papers), author_hits, venue_hits, penalty_hits, capped,
+        "评分叠加：%d 篇中 %d 篇命中 featured author，%d 篇命中顶会，%d 篇触发封顶",
+        len(papers), author_hits, venue_hits, capped,
     )
     return reranked
 

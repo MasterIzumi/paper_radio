@@ -22,14 +22,29 @@ REQUEST_RETRY_BASE_SLEEP = int(os.getenv("REQUEST_RETRY_BASE_SLEEP", "5"))
 MAX_PAPERS_TO_RANK = 200  # 送给 LLM 的上限（两阶段筛选）
 
 # ── 规则预筛黑名单 ────────────────────────────────────────────────────────────
-# 只要论文的任一 arXiv subject 命中这个集合，就在规则预筛阶段直接剔除，
-# 不再消耗 LLM。subject 比对 case-insensitive，但写法建议保留官方大小写。
+# subject 黑名单：论文任一 arXiv subject 命中即直接剔除，不消耗后续 LLM。
+# subject 比对 case-insensitive，但写法建议保留官方大小写。
 BLACKLIST_SUBJECTS = [
     "eess.SY",  # Systems and Control
     "cs.MA",    # Multiagent Systems
     "cs.SE",    # Software Engineering
     "cs.HC",    # Human-Computer Interaction
     "cs.OS",    # Operating Systems
+]
+
+# 关键词黑名单：扫描 title + abstract，任一关键词命中即剔除。
+# 与 BLACKLIST_SUBJECTS 的分工——subject 是整篇分区不对口；关键词是分区沾边但主题
+# 明确跑偏（例如 cs.RO 里的 Drone Racing / UAV）。
+# 匹配规则：case-insensitive + word boundary + 可选复数 ``s?``；词组内部的空格用
+# ``\s+`` 匹配，避免 "Drone  Racing"（双空格）漏检。
+BLACKLIST_KEYWORDS = [
+    "Drone Racing",
+    "V2V",
+    "V2X",
+    "Remote Sensing",
+    "UAV",
+    "Quadrotor",
+    "Underwater",
 ]
 
 # ── 排名偏好 ──────────────────────────────────────────────────────────────────
@@ -92,25 +107,8 @@ FEATURED_VENUES = ["CVPR", "ICCV", "NeurIPS", "ICLR", "ECCV", "ICML", "CoRL", "R
 VENUE_BONUS = int(os.getenv("VENUE_BONUS", "4"))
 
 # 总 bonus 硬封顶 = TOTAL_SCORE_MAX - RAW_SCORE_MAX
-# 超过预算的 bonus 会被截断。penalty 不受此封顶限制（降权另算）。
+# 超过预算的 bonus 会被截断。
 BONUS_BUDGET = TOTAL_SCORE_MAX - RAW_SCORE_MAX
-
-# ── 主题黑名单降权（不剔除，只压分，保留审计痕迹）────────────────────────────
-# 关键词命中范围：论文 title + abstract；匹配 case-insensitive + word boundary，
-# 支持简单复数（UAV / UAVs 都命中，但 V2V 不会误伤 v2vnet 这类连写）。
-# 词组（含空格）原样匹配，缩写按严格 word boundary 匹配。
-BLACKLIST_KEYWORDS = [
-    "Drone Racing",
-    "V2V",
-    "V2X",
-    "Remote Sensing",
-    "UAV",
-    "Quadrotor",
-]
-# 每命中一个关键词降多少分（不区分 title 还是 abstract，不按出现次数叠加）
-PENALTY_PER_HIT = int(os.getenv("PENALTY_PER_HIT", "6"))
-# 单篇 penalty 累计封顶（防止几个关键词撞车直接拉到负分）
-PENALTY_CAP = int(os.getenv("PENALTY_CAP", "12"))
 
 # ── 机构推断配置 ──────────────────────────────────────────────────────────────
 # 每篇论文独立调用 LLM 推断机构，这里控制并发上限。LLM API 通常允许 4-8 并发，

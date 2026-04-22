@@ -143,8 +143,6 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
             score_bits.append(f"作者 +{paper.author_bonus}")
         if paper.venue_bonus:
             score_bits.append(f"顶会 +{paper.venue_bonus}")
-        if paper.penalty:
-            score_bits.append(f"降权 -{paper.penalty}")
 
         lines += [
             f"### {i}. {paper.title or 'N/A'}",

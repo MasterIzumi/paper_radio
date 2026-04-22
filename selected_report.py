@@ -21,18 +21,11 @@ def _fmt_institutions(paper: RankedPaper) -> str:
 
 
 def _fmt_bonus(paper: RankedPaper, attr: str) -> str:
-    """格式化加分/扣分列。
-
-    约定：``RankedPaper`` 中 ``author_bonus`` / ``venue_bonus`` / ``penalty``
-    都存的是"正数绝对值"（由 ``with_adjustments`` 里 ``max(0, ...)`` 保证）。
-    语义上 ``penalty`` 是降权——要展示为 ``-N``；bonus 类字段则展示为 ``+N``。
-    零值或缺失统一显示 '-'。
-    """
+    """格式化加分列（author_bonus / venue_bonus 等），展示 +N；零值或缺失显示 '-'。"""
     value = getattr(paper, attr, None)
     if value in (None, 0):
         return "-"
-    sign = "-" if attr == "penalty" else "+"
-    return f"{sign}{abs(int(value))}"
+    return f"+{abs(int(value))}"
 
 
 def _ranked_sort_key(paper: RankedPaper) -> tuple[int, tuple[int, str]]:
@@ -64,7 +57,6 @@ def build_selected_paper_rows(ranked_papers: List[RankedPaper]) -> List[List[str
                 str(paper.novelty_score),
                 _fmt_bonus(paper, "author_bonus"),
                 _fmt_bonus(paper, "venue_bonus"),
-                _fmt_bonus(paper, "penalty"),
                 paper.one_line_summary,
                 _fmt_institutions(paper),
                 clip(fmt_authors(paper.authors), 38),
@@ -88,7 +80,6 @@ def build_selected_markdown(now: datetime, ranked_papers: List[RankedPaper]) -> 
             "新颖性",
             "作者加分",
             "顶会加分",
-            "降权",
             "一句话总结",
             "机构",
             "Authors",

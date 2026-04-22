@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 import prompts
 from config import (
+    BLACKLIST_KEYWORDS,
     BLACKLIST_SUBJECTS,
     INSTITUTION_INFERENCE_CONCURRENCY,
     MAX_PAPERS_TO_RANK,
@@ -65,47 +66,103 @@ def _is_blacklisted_subject(paper: Paper, blacklist: set[str]) -> bool:
     return any((cat or "").lower() in blacklist for cat in paper.categories)
 
 
+def _build_blacklist_keyword_pattern(keyword: str) -> re.Pattern:
+    """把一个黑名单关键词编成 word-boundary + 词间 ``\\s+`` + 可选复数 ``s?`` 的正则。
+
+    - ``UAV`` → ``\\bUAVs?\\b``：命中 UAV / UAVs，但不误伤 UAVNet / UAV2
+    - ``V2X`` → ``\\bV2Xs?\\b``：命中 V2X / V2X-based，但不误伤 V2XNet
+    - ``Drone Racing`` → ``\\bDrone\\s+Racings?\\b``：允许词间多个空格
+    """
+    words = [w for w in keyword.split() if w]
+    if not words:
+        raise ValueError("empty blacklist keyword")
+    core = r"\s+".join(re.escape(w) for w in words)
+    return re.compile(rf"\b{core}s?\b", re.IGNORECASE)
+
+
+_BLACKLIST_KEYWORD_PATTERNS: List[tuple[str, re.Pattern]] = [
+    (kw, _build_blacklist_keyword_pattern(kw)) for kw in BLACKLIST_KEYWORDS if kw
+]
+
+
+def _is_blacklisted_keyword(paper: Paper) -> Optional[str]:
+    """命中任一黑名单关键词即返回命中的关键词，否则返回 None。扫 title + abstract。"""
+    if not _BLACKLIST_KEYWORD_PATTERNS:
+        return None
+    haystack_parts: List[str] = []
+    if paper.title:
+        haystack_parts.append(paper.title)
+    if paper.abstract:
+        haystack_parts.append(paper.abstract)
+    if not haystack_parts:
+        return None
+    haystack = " \n ".join(haystack_parts)
+    for keyword, pattern in _BLACKLIST_KEYWORD_PATTERNS:
+        if pattern.search(haystack):
+            return keyword
+    return None
+
+
 def _rule_prefilter(papers: List[Paper]) -> List[Paper]:
     """本地规则预筛全量候选——纯字符串匹配，零成本，不截断输入。
 
-    两步：
+    三步：
     1. **subject 黑名单硬剔除**：论文任一 arXiv 分类落在 ``BLACKLIST_SUBJECTS``（如
        ``eess.SY`` / ``cs.MA``）即直接移除，不消耗后续 LLM 额度。
     2. **关键词白名单命中**：拼接 title + abstract + categories，任一
-       ``PREFILTER_KEYWORDS`` 命中即保留。
+       ``PREFILTER_KEYWORDS`` 命中即保留（全军覆没时回退）。
+    3. **关键词黑名单硬剔除**：扫 title + abstract，命中 ``BLACKLIST_KEYWORDS``
+       （Drone Racing / V2V / V2X / UAV 等偏题主题）即剔除。
 
     LLM 输入上限 (MAX_PAPERS_TO_RANK) 在下一步 _stage1_filter 才生效。
     """
     blacklist = {s.lower() for s in BLACKLIST_SUBJECTS}
 
-    after_blacklist: List[Paper] = []
-    rejected = 0
+    after_subject_blacklist: List[Paper] = []
+    subject_rejected = 0
     for paper in papers:
         if _is_blacklisted_subject(paper, blacklist):
-            rejected += 1
+            subject_rejected += 1
             continue
-        after_blacklist.append(paper)
+        after_subject_blacklist.append(paper)
 
-    if rejected:
+    if subject_rejected:
         logger.info(
             "subject 黑名单剔除：%d 篇（命中 %s）",
-            rejected, ", ".join(sorted(BLACKLIST_SUBJECTS)),
+            subject_rejected, ", ".join(sorted(BLACKLIST_SUBJECTS)),
         )
 
-    result: List[Paper] = []
-    for paper in after_blacklist:
+    keyword_matched: List[Paper] = []
+    for paper in after_subject_blacklist:
         text = " ".join([paper.title, paper.abstract, " ".join(paper.categories)]).lower()
         if any(keyword in text for keyword in PREFILTER_KEYWORDS):
-            result.append(paper)
+            keyword_matched.append(paper)
 
-    if not result:
-        fallback = after_blacklist[: min(STAGE1_KEEP * 2, len(after_blacklist))]
-        logger.info("关键词预筛未命中，回退保留前 %d 篇进入标题粗筛", len(fallback))
-        return fallback
+    if not keyword_matched:
+        fallback = after_subject_blacklist[: min(STAGE1_KEEP * 2, len(after_subject_blacklist))]
+        logger.info("关键词预筛未命中，回退保留前 %d 篇进入黑名单过滤 + 标题粗筛", len(fallback))
+        keyword_matched = fallback
+
+    result: List[Paper] = []
+    kw_rejected = 0
+    kw_rejected_by_keyword: Dict[str, int] = {}
+    for paper in keyword_matched:
+        hit = _is_blacklisted_keyword(paper)
+        if hit:
+            kw_rejected += 1
+            kw_rejected_by_keyword[hit] = kw_rejected_by_keyword.get(hit, 0) + 1
+            continue
+        result.append(paper)
+
+    if kw_rejected:
+        breakdown = ", ".join(
+            f"{kw}:{n}" for kw, n in sorted(kw_rejected_by_keyword.items(), key=lambda x: -x[1])
+        )
+        logger.info("关键词黑名单剔除：%d 篇（%s）", kw_rejected, breakdown)
 
     logger.info(
-        "规则预筛：%d 输入 → %d 剔除黑名单 → %d 关键词命中",
-        len(papers), rejected, len(result),
+        "规则预筛：%d 输入 → subject 剔除 %d → 白名单命中 %d → 关键词黑名单剔除 %d → 剩 %d",
+        len(papers), subject_rejected, len(keyword_matched), kw_rejected, len(result),
     )
     return result
 
