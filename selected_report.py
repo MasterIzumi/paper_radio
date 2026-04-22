@@ -21,11 +21,18 @@ def _fmt_institutions(paper: RankedPaper) -> str:
 
 
 def _fmt_bonus(paper: RankedPaper, attr: str) -> str:
-    """加分/扣分列。现阶段模型还没有这些字段，统一展示 '-'，留给后续 PR 扩展。"""
+    """格式化加分/扣分列。
+
+    约定：``RankedPaper`` 中 ``author_bonus`` / ``venue_bonus`` / ``penalty``
+    都存的是"正数绝对值"（由 ``with_adjustments`` 里 ``max(0, ...)`` 保证）。
+    语义上 ``penalty`` 是降权——要展示为 ``-N``；bonus 类字段则展示为 ``+N``。
+    零值或缺失统一显示 '-'。
+    """
     value = getattr(paper, attr, None)
     if value in (None, 0):
         return "-"
-    return f"+{value}" if value > 0 else str(value)
+    sign = "-" if attr == "penalty" else "+"
+    return f"{sign}{abs(int(value))}"
 
 
 def _ranked_sort_key(paper: RankedPaper) -> tuple[int, tuple[int, str]]:
