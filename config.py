@@ -21,6 +21,17 @@ REQUEST_RETRY_BASE_SLEEP = int(os.getenv("REQUEST_RETRY_BASE_SLEEP", "5"))
 
 MAX_PAPERS_TO_RANK = 200  # 送给 LLM 的上限（两阶段筛选）
 
+# ── 规则预筛黑名单 ────────────────────────────────────────────────────────────
+# 只要论文的任一 arXiv subject 命中这个集合，就在规则预筛阶段直接剔除，
+# 不再消耗 LLM。subject 比对 case-insensitive，但写法建议保留官方大小写。
+BLACKLIST_SUBJECTS = [
+    "eess.SY",  # Systems and Control
+    "cs.MA",    # Multiagent Systems
+    "cs.SE",    # Software Engineering
+    "cs.HC",    # Human-Computer Interaction
+    "cs.OS",    # Operating Systems
+]
+
 # ── 排名偏好 ──────────────────────────────────────────────────────────────────
 
 TOPICS_OF_INTEREST = """
@@ -42,12 +53,23 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 FAST_MODEL = os.getenv("FAST_MODEL", "")
 STRONG_MODEL = os.getenv("STRONG_MODEL", os.getenv("LLM_MODEL", ""))
 
+# ── 评分体系 ──────────────────────────────────────────────────────────────────
+# LLM 直接产出的"原始分"：relevance (0-10) + novelty (0-10)
+RAW_SCORE_MAX = 20
+# 最终显示的总分上限 = 原始分上限 + 加分项预算（重点作者 / 顶会录用等）
+# 留出 +10 的 bonus 余量，后续 PR 引入加分维度时不用再次扩表。
+TOTAL_SCORE_MAX = 30
+
 # ── 深度分析配置 ──────────────────────────────────────────────────────────────
-# 排名只用 relevance + novelty 两个 0-10 维度，总分上限 20。阈值 14 相当于 70%。
 DEEP_ANALYSIS_MAX_PAPERS = int(os.getenv("DEEP_ANALYSIS_MAX_PAPERS", "3"))
-DEEP_ANALYSIS_MIN_TOTAL_SCORE = int(os.getenv("DEEP_ANALYSIS_MIN_TOTAL_SCORE", "14"))
-# 评分显示用的总分上限（相关性 0-10 + 新颖性 0-10）。
-TOTAL_SCORE_MAX = 20
+# 总分 ≥ 21 才做精读（约为新总分上限 30 的 70%）
+DEEP_ANALYSIS_MIN_TOTAL_SCORE = int(os.getenv("DEEP_ANALYSIS_MIN_TOTAL_SCORE", "21"))
+
+# ── 日报展示阈值 ──────────────────────────────────────────────────────────────
+# 速览 / 卡片动态展示：分数 ≥ TOP_DISPLAY_MIN_SCORE 的全部显示，
+# 同时保底至少 TOP_DISPLAY_MIN_COUNT 篇（防止低分日什么都没有）。
+TOP_DISPLAY_MIN_SCORE = int(os.getenv("TOP_DISPLAY_MIN_SCORE", "18"))
+TOP_DISPLAY_MIN_COUNT = int(os.getenv("TOP_DISPLAY_MIN_COUNT", "5"))
 
 # ── 机构推断配置 ──────────────────────────────────────────────────────────────
 # 每篇论文独立调用 LLM 推断机构，这里控制并发上限。LLM API 通常允许 4-8 并发，

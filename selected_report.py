@@ -11,6 +11,23 @@ from models import RankedPaper
 from recent_report import render_table
 
 
+def _fmt_institutions(paper: RankedPaper) -> str:
+    """机构列显示值：优先 normalized_institutions，再 fallback 到 summary / '-'。"""
+    if paper.normalized_institutions:
+        return clip(" / ".join(paper.normalized_institutions), 48)
+    if paper.institution_summary:
+        return clip(paper.institution_summary, 48)
+    return "-"
+
+
+def _fmt_bonus(paper: RankedPaper, attr: str) -> str:
+    """加分/扣分列。现阶段模型还没有这些字段，统一展示 '-'，留给后续 PR 扩展。"""
+    value = getattr(paper, attr, None)
+    if value in (None, 0):
+        return "-"
+    return f"+{value}" if value > 0 else str(value)
+
+
 def _ranked_sort_key(paper: RankedPaper) -> tuple[int, tuple[int, str]]:
     return (paper.total_score, arxiv_sort_key(paper))
 
@@ -38,7 +55,11 @@ def build_selected_paper_rows(ranked_papers: List[RankedPaper]) -> List[List[str
                 str(paper.total_score),
                 str(paper.relevance_score),
                 str(paper.novelty_score),
+                _fmt_bonus(paper, "author_bonus"),
+                _fmt_bonus(paper, "venue_bonus"),
+                _fmt_bonus(paper, "penalty"),
                 paper.one_line_summary,
+                _fmt_institutions(paper),
                 clip(fmt_authors(paper.authors), 38),
                 paper.primary_url,
             ]
@@ -58,7 +79,11 @@ def build_selected_markdown(now: datetime, ranked_papers: List[RankedPaper]) -> 
             "总分",
             "相关性",
             "新颖性",
+            "作者加分",
+            "顶会加分",
+            "降权",
             "一句话总结",
+            "机构",
             "Authors",
             "URL",
         ],

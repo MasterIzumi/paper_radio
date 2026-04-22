@@ -20,7 +20,11 @@ from recent_report import (
     summarize_daily_counts,
     weekday_cn,
 )
-from ranker import enrich_top_papers_with_institutions, rank_papers
+from ranker import (
+    enrich_papers_with_institutions,
+    run_stage1_filter,
+    run_stage2_rank,
+)
 from reporter import generate_report
 from selected_report import save_selected_report
 
@@ -91,10 +95,20 @@ def main():
     )
     print(f"     抓取快照已保存：{crawl_snapshot_path}")
 
-    # Step 2: 筛选与排序
-    print("\n[2/3] 正在筛选并排序候选论文...")
-    ranked = rank_papers(papers)
-    print(f"     筛选出 TOP {len(ranked)} 篇论文")
+    # Step 2: 标题粗筛 → 机构推理 → 摘要精排
+    print("\n[2/3] 正在筛选候选并生成评分...")
+    candidates = run_stage1_filter(papers)
+    if not candidates:
+        print("     标题粗筛后无候选论文，停止。")
+        sys.exit(0)
+    print(f"     标题粗筛后进入 selected 集：{len(candidates)} 篇")
+
+    print(f"     为 {len(candidates)} 篇 selected 论文并行补充机构信息...")
+    enriched = enrich_papers_with_institutions(candidates)
+
+    print("     对 selected 论文进行摘要精排...")
+    ranked = run_stage2_rank(enriched)
+    print(f"     精排完成，共 {len(ranked)} 篇论文拿到分数")
 
     selected_snapshot_path = save_selected_report(
         output_dir=config.SELECTED_OUTPUT_DIR,
@@ -103,10 +117,9 @@ def main():
     )
     print(f"     入选快照已保存：{selected_snapshot_path}")
 
-    # Step 3: 生成报告
-    print("\n[3/3] 正在补充 TOP 10 机构信息并生成日报...")
-    ranked_for_report = enrich_top_papers_with_institutions(ranked, top_k=10)
-    report = generate_report(ranked_for_report)
+    # Step 3: 生成日报
+    print("\n[3/3] 正在生成日报...")
+    report = generate_report(ranked)
 
     # 保存
     date_str = datetime.now().strftime("%Y-%m-%d")

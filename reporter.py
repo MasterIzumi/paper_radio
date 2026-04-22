@@ -10,6 +10,8 @@ from config import (
     DEEP_ANALYSIS_MAX_PAPERS,
     DEEP_ANALYSIS_MIN_TOTAL_SCORE,
     LLM_PROVIDER,
+    TOP_DISPLAY_MIN_COUNT,
+    TOP_DISPLAY_MIN_SCORE,
     TOTAL_SCORE_MAX,
 )
 from formatting import escape_md_cell, fmt_affiliations, fmt_authors
@@ -25,6 +27,25 @@ def _select_deep_analysis_papers(ranked_papers: List[RankedPaper]) -> List[Ranke
         paper for paper in ranked_papers if paper.total_score >= DEEP_ANALYSIS_MIN_TOTAL_SCORE
     ]
     return eligible[:DEEP_ANALYSIS_MAX_PAPERS]
+
+
+def _select_top_display_papers(ranked_papers: List[RankedPaper]) -> List[RankedPaper]:
+    """按阈值 + 最小数动态选取要展示的重点论文。
+
+    规则：
+    1. 先取 total_score >= TOP_DISPLAY_MIN_SCORE 的全部；
+    2. 若不足 TOP_DISPLAY_MIN_COUNT 篇，按已排序顺序补到 TOP_DISPLAY_MIN_COUNT；
+    3. 若候选本身少于 TOP_DISPLAY_MIN_COUNT，能有多少展示多少。
+
+    前置：``ranked_papers`` 已按 total_score 降序。
+    """
+    if not ranked_papers:
+        return []
+    high_score = [p for p in ranked_papers if p.total_score >= TOP_DISPLAY_MIN_SCORE]
+    if len(high_score) >= TOP_DISPLAY_MIN_COUNT:
+        return high_score
+    # 保底：从整个 ranked 列表里按顺序补齐到 TOP_DISPLAY_MIN_COUNT
+    return ranked_papers[: min(TOP_DISPLAY_MIN_COUNT, len(ranked_papers))]
 
 
 def _deep_analysis(paper: RankedPaper) -> str:
@@ -83,14 +104,20 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
         lines.append("今日暂无符合条件的论文，请明日再试。\n")
         return "\n".join(lines)
 
-    # ── TOP 10 速览表格 ───────────────────────────────────────────────────────
+    top_display = _select_top_display_papers(ranked_papers)
+    n = len(top_display)
+    threshold_note = (
+        f"（阈值 ≥ {TOP_DISPLAY_MIN_SCORE} 分，最少展示 {TOP_DISPLAY_MIN_COUNT} 篇）"
+    )
+
+    # ── 重点论文速览表格 ──────────────────────────────────────────────────────
     lines += [
-        "## 🏆 TOP 10 论文速览",
+        f"## 🏆 重点论文速览（{n} 篇）{threshold_note}",
         "",
         "| # | 标题 | 机构 | 方向 | 综合分 | 一句话总结 |",
         "|---|------|------|------|--------|-----------|",
     ]
-    for paper in ranked_papers[:10]:
+    for paper in top_display:
         title = escape_md_cell(paper.title or "N/A")
         url = paper.primary_url
         affs = escape_md_cell(fmt_affiliations(paper))
@@ -104,9 +131,9 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
 
     lines += ["", "---", ""]
 
-    # ── TOP 10 详细卡片 ───────────────────────────────────────────────────────
-    lines += ["## 📋 TOP 10 论文列表", ""]
-    for i, paper in enumerate(ranked_papers[:10], 1):
+    # ── 重点论文详细卡片 ──────────────────────────────────────────────────────
+    lines += [f"## 📋 重点论文列表（{n} 篇）", ""]
+    for i, paper in enumerate(top_display, 1):
         lines += [
             f"### {i}. {paper.title or 'N/A'}",
             "",
@@ -114,7 +141,7 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
             f"- **作者**: {fmt_authors(paper.authors)}",
             f"- **机构**: {fmt_affiliations(paper)}",
             f"- **方向**: {paper.topic_category or '—'} | **提交**: {paper.published_day or 'N/A'}",
-            f"- **评分**: 相关性 {paper.relevance_score} · 新颖性 {paper.novelty_score}",
+            f"- **评分**: 总分 {paper.total_score}/{TOTAL_SCORE_MAX} · 相关性 {paper.relevance_score} · 新颖性 {paper.novelty_score}",
             f"- **摘要**: {paper.one_line_summary or '—'}",
             "",
         ]

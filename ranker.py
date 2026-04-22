@@ -8,10 +8,11 @@ from typing import Dict, List, Optional
 
 import prompts
 from config import (
+    BLACKLIST_SUBJECTS,
     INSTITUTION_INFERENCE_CONCURRENCY,
     MAX_PAPERS_TO_RANK,
+    RAW_SCORE_MAX,
     TOPICS_OF_INTEREST,
-    TOTAL_SCORE_MAX,
 )
 from formatting import fmt_affiliations, fmt_authors
 from llm import chat, extract_json
@@ -22,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 # 第一阶段：仅凭标题快速过滤，保留候选数量
 STAGE1_KEEP = 30
-TOP_N = 10
 PREFILTER_KEYWORDS = [
     "autonomous driving", "driving", "driverless", "end-to-end", "e2e",
     "world model", "world models", "video prediction", "occupancy",
@@ -58,23 +58,55 @@ def _dedupe_strings(values: List[str]) -> List[str]:
 # ── 规则预筛 ─────────────────────────────────────────────────────────────────
 
 
+def _is_blacklisted_subject(paper: Paper, blacklist: set[str]) -> bool:
+    """论文 categories 与 subject 黑名单有交集即剔除。比对大小写不敏感。"""
+    if not blacklist:
+        return False
+    return any((cat or "").lower() in blacklist for cat in paper.categories)
+
+
 def _rule_prefilter(papers: List[Paper]) -> List[Paper]:
-    """本地关键词预筛全量候选——纯字符串匹配，零成本，不截断输入。
+    """本地规则预筛全量候选——纯字符串匹配，零成本，不截断输入。
+
+    两步：
+    1. **subject 黑名单硬剔除**：论文任一 arXiv 分类落在 ``BLACKLIST_SUBJECTS``（如
+       ``eess.SY`` / ``cs.MA``）即直接移除，不消耗后续 LLM 额度。
+    2. **关键词白名单命中**：拼接 title + abstract + categories，任一
+       ``PREFILTER_KEYWORDS`` 命中即保留。
 
     LLM 输入上限 (MAX_PAPERS_TO_RANK) 在下一步 _stage1_filter 才生效。
     """
-    result: List[Paper] = []
+    blacklist = {s.lower() for s in BLACKLIST_SUBJECTS}
+
+    after_blacklist: List[Paper] = []
+    rejected = 0
     for paper in papers:
+        if _is_blacklisted_subject(paper, blacklist):
+            rejected += 1
+            continue
+        after_blacklist.append(paper)
+
+    if rejected:
+        logger.info(
+            "subject 黑名单剔除：%d 篇（命中 %s）",
+            rejected, ", ".join(sorted(BLACKLIST_SUBJECTS)),
+        )
+
+    result: List[Paper] = []
+    for paper in after_blacklist:
         text = " ".join([paper.title, paper.abstract, " ".join(paper.categories)]).lower()
         if any(keyword in text for keyword in PREFILTER_KEYWORDS):
             result.append(paper)
 
     if not result:
-        fallback = papers[: min(STAGE1_KEEP * 2, len(papers))]
-        logger.info("规则预筛未命中，回退保留前 %d 篇进入标题粗筛", len(fallback))
+        fallback = after_blacklist[: min(STAGE1_KEEP * 2, len(after_blacklist))]
+        logger.info("关键词预筛未命中，回退保留前 %d 篇进入标题粗筛", len(fallback))
         return fallback
 
-    logger.info("规则预筛：%d → %d 篇", len(papers), len(result))
+    logger.info(
+        "规则预筛：%d 输入 → %d 剔除黑名单 → %d 关键词命中",
+        len(papers), rejected, len(result),
+    )
     return result
 
 
@@ -217,25 +249,23 @@ def infer_paper_institutions(paper: Paper | RankedPaper) -> Optional[RankedPaper
     return _infer_one_paper_institution(ranked, label_suffix=":single")
 
 
-def enrich_top_papers_with_institutions(
-    ranked_papers: List[RankedPaper], top_k: int = 10
+def enrich_papers_with_institutions(
+    papers: List[RankedPaper],
 ) -> List[RankedPaper]:
-    """为最终 TOP K 论文并行补充机构信息，供日报展示。
+    """对给定的一组论文并行补充机构信息。
 
     每篇论文一个 worker：``fetch PDF 首页 → 调 LLM 推断``。同一个 ThreadPoolExecutor
     上限既限制 arxiv PDF 并发，也限制 LLM 调用并发；单篇失败不影响其它论文。
+
+    调用方决定要机构化哪些论文；在当前 pipeline 中通常是"stage1 通过的全部候选集"。
     """
-    if not ranked_papers:
+    if not papers:
         return []
 
-    top_slice = ranked_papers[:top_k]
-    if not top_slice:
-        return ranked_papers
-
-    workers = max(1, min(INSTITUTION_INFERENCE_CONCURRENCY, len(top_slice)))
+    workers = max(1, min(INSTITUTION_INFERENCE_CONCURRENCY, len(papers)))
     logger.info(
-        "正在为 TOP %d 论文并行补充机构信息（并发 %d）...",
-        len(top_slice), workers,
+        "正在为 %d 篇候选并行补充机构信息（并发 %d）...",
+        len(papers), workers,
     )
 
     enriched_by_id: Dict[str, RankedPaper] = {}
@@ -244,9 +274,9 @@ def enrich_top_papers_with_institutions(
             pool.submit(
                 _infer_one_paper_institution,
                 paper,
-                label_suffix=f":top{index}",
+                label_suffix=f":cand{index}",
             ): paper
-            for index, paper in enumerate(top_slice, 1)
+            for index, paper in enumerate(papers, 1)
         }
         completed = 0
         for future in as_completed(futures):
@@ -264,7 +294,7 @@ def enrich_top_papers_with_institutions(
             status = "✓" if (result.institution_summary or result.normalized_institutions) else "·"
             logger.info(
                 "[%d/%d] %s 机构推断完成 %s",
-                completed, len(top_slice), status, original.arxiv_id,
+                completed, len(papers), status, original.arxiv_id,
             )
 
     matched = sum(
@@ -272,14 +302,11 @@ def enrich_top_papers_with_institutions(
         if paper.institution_summary or paper.normalized_institutions
     )
     logger.info(
-        "TOP %d 机构推断结束：%d/%d 篇拿到机构摘要",
-        len(top_slice), matched, len(top_slice),
+        "机构推断结束：%d/%d 篇拿到机构摘要", matched, len(papers),
     )
 
-    merged: List[RankedPaper] = []
-    for paper in ranked_papers:
-        merged.append(enriched_by_id.get(paper.arxiv_id, paper))
-    return merged
+    # 按原顺序返回（ThreadPoolExecutor 的 as_completed 会打乱顺序）
+    return [enriched_by_id.get(paper.arxiv_id, paper) for paper in papers]
 
 
 # ── 第二阶段：摘要精排 ─────────────────────────────────────────────────────────
@@ -305,8 +332,19 @@ def _normalize_ranked_papers(papers: List[RankedPaper]) -> List[RankedPaper]:
     return normalized
 
 
-def _stage2_rank(papers: List[Paper]) -> List[RankedPaper]:
-    """对候选论文发送完整摘要，打分排出 TOP N。"""
+def _as_ranked(paper: Paper | RankedPaper) -> RankedPaper:
+    """把 Paper 提升成 RankedPaper（已经是 RankedPaper 的原样返回）。"""
+    return paper if isinstance(paper, RankedPaper) else RankedPaper.from_paper(paper)
+
+
+def _stage2_rank(papers: List[RankedPaper]) -> List[RankedPaper]:
+    """对候选论文发送摘要，**对全量逐篇打分**，返回完整排序后的列表。
+
+    这里不再截断 TOP N——下游 reporter 按阈值 + 最小数动态选取要展示的论文。
+    """
+    if not papers:
+        return []
+
     paper_blocks_list = []
     for i, paper in enumerate(papers, 1):
         paper_blocks_list.append(
@@ -320,44 +358,44 @@ def _stage2_rank(papers: List[Paper]) -> List[RankedPaper]:
         "stage2_abstract_rank",
         topics_of_interest=TOPICS_OF_INTEREST,
         paper_blocks="\n".join(paper_blocks_list),
-        total_score_max=TOTAL_SCORE_MAX,
-        top_n=TOP_N,
+        raw_score_max=RAW_SCORE_MAX,
+        paper_count=len(papers),
     )
-
 
     try:
         logger.info(
-            "阶段3/3 摘要精排：正在综合评估 %d 篇候选论文...", len(papers),
+            "摘要精排：正在对 %d 篇候选逐篇打分...", len(papers),
         )
         raw = chat(
             [{"role": "user", "content": prompt}],
             # strong 档常是 reasoning 模型（kimi-k2.5 / claude opus thinking），
-            # 思考链也占 max_tokens 预算。10 篇 JSON 实际只需几千 tokens，给 24000
-            # 是为了留足推理余量，避免截断后输出半截 JSON 解析失败。
+            # 思考链也占 max_tokens 预算；全量打分的 JSON 比旧 TOP 10 大一些，给
+            # 24000 留足推理余量，避免截断后输出半截 JSON 解析失败。
             max_tokens=24000,
             tier="strong",
             label="stage2_abstract_rank",
         )
-        data = extract_json(raw, list_roots=("top_papers",))
+        data = extract_json(raw, list_roots=("ranked_papers",))
     except Exception as exc:
         logger.warning(
-            "阶段3/3 摘要精排失败（%s），回退到候选前 %d 篇", exc, TOP_N,
+            "摘要精排失败（%s），回退到 0 分兜底（让所有候选都出现在 selected 快照里）",
+            exc,
         )
-        return _normalize_ranked_papers(
-            [RankedPaper.from_paper(p) for p in papers[:TOP_N]]
-        )
+        return _normalize_ranked_papers(list(papers))
 
     papers_by_id = {paper.arxiv_id: paper for paper in papers}
+    scored_ids: set[str] = set()
     result: List[RankedPaper] = []
-    for meta in data.get("top_papers") or data.get("items") or []:
+    for meta in data.get("ranked_papers") or data.get("items") or []:
         if not isinstance(meta, dict):
             continue
         aid = str(meta.get("arxiv_id", ""))
         base = papers_by_id.get(aid)
         if base is None:
             continue
+        scored_ids.add(aid)
         result.append(
-            RankedPaper.from_paper(base).with_scores(
+            base.with_scores(
                 relevance_score=meta.get("relevance_score"),
                 novelty_score=meta.get("novelty_score"),
                 total_score=meta.get("total_score"),
@@ -367,28 +405,42 @@ def _stage2_rank(papers: List[Paper]) -> List[RankedPaper]:
             )
         )
 
-    if not result:
-        logger.warning("未匹配到论文 ID，回退到候选前 %d 篇", TOP_N)
-        return _normalize_ranked_papers(
-            [RankedPaper.from_paper(p) for p in papers[:TOP_N]]
+    # LLM 漏评的候选用 0 分兜底塞进去，保证 selected_papers 快照完整
+    missing = [paper for paper in papers if paper.arxiv_id not in scored_ids]
+    if missing:
+        logger.warning(
+            "摘要精排 LLM 漏了 %d/%d 篇，按 0 分兜底补入：%s",
+            len(missing), len(papers),
+            ", ".join(p.arxiv_id for p in missing[:5]) + ("..." if len(missing) > 5 else ""),
         )
+        result.extend(missing)
 
     logger.info(
-        "阶段3/3 摘要精排完成：%d → TOP %d 篇", len(papers), len(result),
+        "摘要精排完成：%d 篇候选中 %d 篇拿到评分，%d 篇兜底 0 分",
+        len(papers), len(scored_ids), len(missing),
     )
     return _normalize_ranked_papers(result)
 
 
-# ── 主入口 ────────────────────────────────────────────────────────────────────
+# ── 公开主入口 ────────────────────────────────────────────────────────────────
 
 
-def rank_papers(papers: List[Paper]) -> List[RankedPaper]:
-    """两阶段排名：标题粗筛 → 摘要精排。"""
+def run_stage1_filter(papers: List[Paper]) -> List[RankedPaper]:
+    """规则预筛 + LLM 标题粗筛，返回即将进入机构推理 / 摘要精排的候选集。
+
+    返回的是 ``RankedPaper`` 列表（分数还是 0），下游直接在同一对象上累加机构 /
+    评分 / 加分扣分字段。
+    """
     if not papers:
         return []
 
-    logger.info("输入 %d 篇论文，开始两阶段筛选...", len(papers))
+    logger.info("输入 %d 篇论文，开始粗筛...", len(papers))
     prefiltered = _rule_prefilter(papers)
     candidates = _stage1_filter(prefiltered)
-    logger.info("进入摘要精排的候选数：%d 篇", len(candidates))
-    return _stage2_rank(candidates)
+    logger.info("进入候选集的论文数：%d 篇", len(candidates))
+    return [_as_ranked(p) for p in candidates]
+
+
+def run_stage2_rank(papers: List[RankedPaper]) -> List[RankedPaper]:
+    """摘要精排：对候选集（通常已补机构）逐篇打分，返回完整排序列表。"""
+    return _stage2_rank(papers)
