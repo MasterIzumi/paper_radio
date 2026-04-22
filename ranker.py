@@ -3,10 +3,16 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
 import prompts
-from config import MAX_PAPERS_TO_RANK, TOPICS_OF_INTEREST, TOTAL_SCORE_MAX
+from config import (
+    INSTITUTION_INFERENCE_CONCURRENCY,
+    MAX_PAPERS_TO_RANK,
+    TOPICS_OF_INTEREST,
+    TOTAL_SCORE_MAX,
+)
 from formatting import fmt_affiliations, fmt_authors
 from llm import chat, extract_json
 from models import Paper, RankedPaper
@@ -53,9 +59,12 @@ def _dedupe_strings(values: List[str]) -> List[str]:
 
 
 def _rule_prefilter(papers: List[Paper]) -> List[Paper]:
-    """先用本地规则预筛，减少全部标题直接送给 LLM。"""
+    """本地关键词预筛全量候选——纯字符串匹配，零成本，不截断输入。
+
+    LLM 输入上限 (MAX_PAPERS_TO_RANK) 在下一步 _stage1_filter 才生效。
+    """
     result: List[Paper] = []
-    for paper in papers[:MAX_PAPERS_TO_RANK]:
+    for paper in papers:
         text = " ".join([paper.title, paper.abstract, " ".join(paper.categories)]).lower()
         if any(keyword in text for keyword in PREFILTER_KEYWORDS):
             result.append(paper)
@@ -65,10 +74,7 @@ def _rule_prefilter(papers: List[Paper]) -> List[Paper]:
         logger.info("规则预筛未命中，回退保留前 %d 篇进入标题粗筛", len(fallback))
         return fallback
 
-    logger.info(
-        "规则预筛：%d → %d 篇",
-        min(len(papers), MAX_PAPERS_TO_RANK), len(result),
-    )
+    logger.info("规则预筛：%d → %d 篇", len(papers), len(result))
     return result
 
 
@@ -94,6 +100,7 @@ def _stage1_filter(papers: List[Paper]) -> List[Paper]:
         raw = chat(
             [{"role": "user", "content": prompt}],
             max_tokens=16000,
+            tier="fast",
             label="stage1_title_filter",
         )
         data = extract_json(raw, list_roots=("relevant_ids",))
@@ -110,87 +117,95 @@ def _stage1_filter(papers: List[Paper]) -> List[Paper]:
         return papers[:STAGE1_KEEP]
 
 
-# ── 机构推断（PDF 首页 + LLM）────────────────────────────────────────────────
+# ── 机构推断（PDF 首页 + LLM，每篇独立 + 并行）────────────────────────────────
 
 
-def _stage_infer_institutions(
-    papers: List[RankedPaper], stage_label: str = "机构推断"
-) -> List[RankedPaper]:
-    """对给定论文集合执行 PDF 驱动的机构归一分析。"""
-    if not papers:
-        return []
-
-    paper_blocks_list = []
-    for index, paper in enumerate(papers, 1):
-        pdf_context = (paper.pdf_first_page_context or "").strip()
-        paper_blocks_list.append(
-            f"[{index}] ID:{paper.arxiv_id}\n"
-            f"Title: {paper.title}\n"
-            f"Authors: {fmt_authors(paper.authors)}\n"
-            f"Raw Affiliations: {fmt_affiliations(paper, max_affiliations=6, prefer_normalized=False)}\n"
-            f"PDF First Page Context: {pdf_context or 'N/A'}\n"
-        )
-
-    prompt = prompts.render(
+def _build_institution_prompt(paper: RankedPaper) -> str:
+    pdf_context = (paper.pdf_first_page_context or "").strip()
+    return prompts.render(
         "institution_inference",
         topics_of_interest=TOPICS_OF_INTEREST,
-        paper_blocks="\n".join(paper_blocks_list),
+        arxiv_id=paper.arxiv_id,
+        title=paper.title,
+        authors=fmt_authors(paper.authors),
+        raw_affiliations=fmt_affiliations(
+            paper, max_affiliations=6, prefer_normalized=False
+        ),
+        pdf_context=pdf_context or "N/A",
     )
 
+
+def _apply_institution_analysis(
+    paper: RankedPaper, analysis: Optional[Dict]
+) -> RankedPaper:
+    """把 LLM 返回的单篇分析结果合并回 RankedPaper。"""
+    if not analysis:
+        return paper
+
+    normalized_list = analysis.get("normalized_institutions", [])
+    if not isinstance(normalized_list, list):
+        normalized_list = []
+    normalized_institutions = _dedupe_strings(normalized_list)
+    raw_affiliations = _dedupe_strings(paper.affiliations)
+    merged_affiliations = _dedupe_strings(normalized_institutions + raw_affiliations)
+
+    return paper.with_institutions(
+        raw_affiliations=raw_affiliations,
+        normalized_institutions=normalized_institutions,
+        merged_affiliations=merged_affiliations,
+        institution_types=str(analysis.get("institution_types", "unknown") or "unknown"),
+        institution_summary=str(analysis.get("institution_summary", "") or ""),
+        institution_evidence_source=str(
+            analysis.get("evidence_source", "unknown") or "unknown"
+        ),
+    )
+
+
+def _infer_one_paper_institution(
+    paper: RankedPaper, *, fetch_pdf_if_missing: bool = True, label_suffix: str = ""
+) -> RankedPaper:
+    """单篇论文：抽 PDF 首页 → 调 LLM → 合并机构字段。失败时原样返回。"""
+    pdf_context = (paper.pdf_first_page_context or "").strip()
+    if not pdf_context and fetch_pdf_if_missing:
+        try:
+            pdf_context = fetch_pdf_first_page_context(
+                paper.arxiv_id, pdf_url=paper.pdf_url
+            )
+        except Exception as exc:
+            logger.warning(
+                "PDF 首页抽取失败 %s：%s（继续仅靠 API affiliations 推断）",
+                paper.arxiv_id, exc,
+            )
+            pdf_context = ""
+        paper = paper.with_institutions(
+            raw_affiliations=paper.raw_affiliations,
+            normalized_institutions=paper.normalized_institutions,
+            merged_affiliations=paper.affiliations,
+            institution_types=paper.institution_types,
+            institution_summary=paper.institution_summary,
+            institution_evidence_source=paper.institution_evidence_source,
+            pdf_first_page_context=pdf_context,
+        )
+
+    prompt = _build_institution_prompt(paper)
     try:
-        logger.info("%s：正在归一 %d 篇论文的机构信息...", stage_label, len(papers))
         raw = chat(
             [{"role": "user", "content": prompt}],
-            max_tokens=8000,
-            label="institution_inference",
+            # 单篇机构 JSON 其实只需要几百 tokens，给 3000 留 buffer：
+            # 万一用户把 fast 档换成 reasoning 模型，不至于被思考过程吃光。
+            max_tokens=3000,
+            tier="fast",
+            label=f"institution_inference{label_suffix}",
         )
-        data = extract_json(raw, list_roots=("analyses",))
+        data = extract_json(raw)
     except Exception as exc:
-        logger.warning("%s失败（%s），继续使用原始 affiliations", stage_label, exc)
-        return papers
-
-    analyses_by_id: Dict[str, Dict] = {}
-    for item in data.get("analyses") or data.get("items") or []:
-        if isinstance(item, dict):
-            arxiv_id = str(item.get("arxiv_id", ""))
-            if arxiv_id:
-                analyses_by_id[arxiv_id] = item
-
-    enriched: List[RankedPaper] = []
-    for paper in papers:
-        analysis = analyses_by_id.get(paper.arxiv_id)
-        if not analysis:
-            enriched.append(paper)
-            continue
-
-        normalized_list = analysis.get("normalized_institutions", [])
-        if not isinstance(normalized_list, list):
-            normalized_list = []
-        normalized_institutions = _dedupe_strings(normalized_list)
-        raw_affiliations = _dedupe_strings(paper.affiliations)
-        merged_affiliations = _dedupe_strings(normalized_institutions + raw_affiliations)
-
-        enriched.append(
-            paper.with_institutions(
-                raw_affiliations=raw_affiliations,
-                normalized_institutions=normalized_institutions,
-                merged_affiliations=merged_affiliations,
-                institution_types=str(analysis.get("institution_types", "unknown") or "unknown"),
-                institution_summary=str(analysis.get("institution_summary", "") or ""),
-                institution_evidence_source=str(
-                    analysis.get("evidence_source", "unknown") or "unknown"
-                ),
-            )
+        logger.warning(
+            "机构推断失败 %s：%s，保留原始 affiliations", paper.arxiv_id, exc
         )
+        return paper
 
-    matched = sum(
-        1 for paper in enriched if paper.institution_summary or paper.normalized_institutions
-    )
-    logger.info(
-        "%s完成：%d/%d 篇成功补充机构摘要",
-        stage_label, matched, len(enriched),
-    )
-    return enriched
+    analysis = data if isinstance(data, dict) else None
+    return _apply_institution_analysis(paper, analysis)
 
 
 def infer_paper_institutions(paper: Paper | RankedPaper) -> Optional[RankedPaper]:
@@ -199,22 +214,17 @@ def infer_paper_institutions(paper: Paper | RankedPaper) -> Optional[RankedPaper
         return None
 
     ranked = paper if isinstance(paper, RankedPaper) else RankedPaper.from_paper(paper)
-    if not ranked.pdf_first_page_context:
-        ranked = ranked.with_institutions(
-            raw_affiliations=ranked.raw_affiliations,
-            pdf_first_page_context=fetch_pdf_first_page_context(
-                ranked.arxiv_id, pdf_url=ranked.pdf_url
-            ),
-        )
-
-    enriched = _stage_infer_institutions([ranked], stage_label="单篇机构推断")
-    return enriched[0] if enriched else ranked
+    return _infer_one_paper_institution(ranked, label_suffix=":single")
 
 
 def enrich_top_papers_with_institutions(
     ranked_papers: List[RankedPaper], top_k: int = 10
 ) -> List[RankedPaper]:
-    """仅为最终 TOP K 论文补充机构信息，供日报展示。"""
+    """为最终 TOP K 论文并行补充机构信息，供日报展示。
+
+    每篇论文一个 worker：``fetch PDF 首页 → 调 LLM 推断``。同一个 ThreadPoolExecutor
+    上限既限制 arxiv PDF 并发，也限制 LLM 调用并发；单篇失败不影响其它论文。
+    """
     if not ranked_papers:
         return []
 
@@ -222,33 +232,49 @@ def enrich_top_papers_with_institutions(
     if not top_slice:
         return ranked_papers
 
+    workers = max(1, min(INSTITUTION_INFERENCE_CONCURRENCY, len(top_slice)))
     logger.info(
-        "正在为 TOP %d 论文补充机构信息（PDF 首页推断）...", len(top_slice)
+        "正在为 TOP %d 论文并行补充机构信息（并发 %d）...",
+        len(top_slice), workers,
     )
-    prepared: List[RankedPaper] = []
-    for index, paper in enumerate(top_slice, 1):
-        logger.info(
-            "抽取第 %d/%d 篇 PDF 首页：%s",
-            index, len(top_slice), paper.arxiv_id,
-        )
-        prepared.append(
-            paper.with_institutions(
-                raw_affiliations=paper.raw_affiliations,
-                merged_affiliations=paper.affiliations,
-                normalized_institutions=paper.normalized_institutions,
-                institution_types=paper.institution_types,
-                institution_summary=paper.institution_summary,
-                institution_evidence_source=paper.institution_evidence_source,
-                pdf_first_page_context=fetch_pdf_first_page_context(
-                    paper.arxiv_id, pdf_url=paper.pdf_url
-                ),
-            )
-        )
 
-    enriched_top = _stage_infer_institutions(
-        prepared, stage_label=f"TOP {len(top_slice)} 机构推断"
+    enriched_by_id: Dict[str, RankedPaper] = {}
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="inst-infer") as pool:
+        futures = {
+            pool.submit(
+                _infer_one_paper_institution,
+                paper,
+                label_suffix=f":top{index}",
+            ): paper
+            for index, paper in enumerate(top_slice, 1)
+        }
+        completed = 0
+        for future in as_completed(futures):
+            original = futures[future]
+            completed += 1
+            try:
+                result = future.result()
+            except Exception as exc:
+                logger.warning(
+                    "机构推断 worker 异常 %s：%s，保留原始 affiliations",
+                    original.arxiv_id, exc,
+                )
+                result = original
+            enriched_by_id[original.arxiv_id] = result
+            status = "✓" if (result.institution_summary or result.normalized_institutions) else "·"
+            logger.info(
+                "[%d/%d] %s 机构推断完成 %s",
+                completed, len(top_slice), status, original.arxiv_id,
+            )
+
+    matched = sum(
+        1 for paper in enriched_by_id.values()
+        if paper.institution_summary or paper.normalized_institutions
     )
-    enriched_by_id = {paper.arxiv_id: paper for paper in enriched_top}
+    logger.info(
+        "TOP %d 机构推断结束：%d/%d 篇拿到机构摘要",
+        len(top_slice), matched, len(top_slice),
+    )
 
     merged: List[RankedPaper] = []
     for paper in ranked_papers:
@@ -305,7 +331,11 @@ def _stage2_rank(papers: List[Paper]) -> List[RankedPaper]:
         )
         raw = chat(
             [{"role": "user", "content": prompt}],
-            max_tokens=8000,
+            # strong 档常是 reasoning 模型（kimi-k2.5 / claude opus thinking），
+            # 思考链也占 max_tokens 预算。10 篇 JSON 实际只需几千 tokens，给 24000
+            # 是为了留足推理余量，避免截断后输出半截 JSON 解析失败。
+            max_tokens=24000,
+            tier="strong",
             label="stage2_abstract_rank",
         )
         data = extract_json(raw, list_roots=("top_papers",))

@@ -16,32 +16,41 @@ from typing import Any, Iterable, List, Optional
 logger = logging.getLogger(__name__)
 
 # ── Provider 注册表 ────────────────────────────────────────────────────────────
-# name -> (base_url, default_model)
+# name -> (base_url, fast_default_model, strong_default_model)
+# fast 档：标题粗筛 / 机构推断这类轻语义任务，要便宜快
+# strong 档：摘要精排 / 深度精读，需要更强的判断力
 PROVIDERS = {
-    "anthropic": (None,                                     "claude-opus-4-6"),
-    "kimi":      ("https://api.moonshot.cn/v1",             "kimi-k2.5"),
-    "zhipu":     ("https://open.bigmodel.cn/api/paas/v4/",  "glm-4-air"),
-    "deepseek":  ("https://api.deepseek.com/v1",            "deepseek-chat"),
+    "anthropic": (None,                                     "claude-haiku-4-5",     "claude-opus-4-6"),
+    "kimi":      ("https://api.moonshot.cn/v1",             "moonshot-v1-32k",      "kimi-k2.6"),
+    "zhipu":     ("https://open.bigmodel.cn/api/paas/v4/",  "glm-4-flash",          "glm-4-plus"),
+    "deepseek":  ("https://api.deepseek.com/v1",            "deepseek-chat",        "deepseek-reasoner"),
     # 兼容任意 OpenAI endpoint：在 config 里设 LLM_PROVIDER="custom"
-    # 并设 LLM_BASE_URL 和 LLM_MODEL
-    "custom":    (os.getenv("LLM_BASE_URL", ""),            os.getenv("LLM_MODEL", "gpt-4o")),
+    # 并设 LLM_BASE_URL + FAST_MODEL / STRONG_MODEL
+    "custom":    (os.getenv("LLM_BASE_URL", ""),            os.getenv("FAST_MODEL", "gpt-4o-mini"),
+                                                            os.getenv("STRONG_MODEL", "gpt-4o")),
 }
 
+VALID_TIERS = ("fast", "strong")
 
-def _get_settings():
-    """从 config 读取 provider / api_key / model，避免循环导入。"""
+
+def _get_settings(tier: str = "strong"):
+    """从 config 读取 provider / api_key / model，按档位选择实际模型。"""
+    if tier not in VALID_TIERS:
+        raise ValueError(f"未知 tier: {tier!r}，可选：{VALID_TIERS}")
+
     import config
     provider = getattr(config, "LLM_PROVIDER", "anthropic").lower()
-    model    = getattr(config, "MODEL", None)
-
     if provider not in PROVIDERS:
         raise ValueError(f"未知 LLM_PROVIDER: {provider}，可选：{list(PROVIDERS)}")
 
-    base_url, default_model = PROVIDERS[provider]
-    if not model:
-        model = default_model
+    base_url, fast_default, strong_default = PROVIDERS[provider]
+    overrides = {
+        "fast":   getattr(config, "FAST_MODEL", "") or "",
+        "strong": getattr(config, "STRONG_MODEL", "") or "",
+    }
+    defaults = {"fast": fast_default, "strong": strong_default}
+    model = overrides[tier] or defaults[tier]
 
-    # 根据 provider 读对应的环境变量，避免串 key
     key_env = {
         "anthropic": "ANTHROPIC_API_KEY",
         "kimi":      "MOONSHOT_API_KEY",
@@ -54,18 +63,19 @@ def _get_settings():
     return provider, api_key, base_url, model
 
 
-def get_active_model() -> str:
-    """返回当前实际会用的模型名（供展示 / 报告用）。"""
-    _, _, _, model = _get_settings()
+def get_active_model(tier: str = "strong") -> str:
+    """返回指定档位实际会用的模型名（供展示 / 报告用）。"""
+    _, _, _, model = _get_settings(tier)
     return model
 
 
 def chat(
     messages: list,
     max_tokens: int = 4000,
-    thinking: bool = False,        # 仅 anthropic 支持
-    stream_to_stdout: bool = False, # 调试用
+    thinking: bool = False,         # 仅 anthropic 支持
+    stream_to_stdout: bool = False,  # 调试用
     *,
+    tier: str = "strong",
     label: str = "llm.chat",
 ) -> str:
     """
@@ -74,14 +84,18 @@ def chat(
     messages 格式（OpenAI 风格）：
         [{"role": "user", "content": "..."}, ...]
 
+    ``tier`` 选择模型档位：
+    - ``"fast"``：标题粗筛 / 机构推断这类简单任务
+    - ``"strong"``（默认）：摘要精排 / 深度精读这类复杂任务
+
     ``label`` 只用于日志里的追踪标识（例如 "stage1_title_filter"），
     不影响请求本身。
     """
-    provider, api_key, base_url, model = _get_settings()
+    provider, api_key, base_url, model = _get_settings(tier)
     prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
     logger.info(
-        "%s → %s/%s (prompt %d chars, max_tokens=%d)",
-        label, provider, model, prompt_chars, max_tokens,
+        "%s [%s] → %s/%s (prompt %d chars, max_tokens=%d)",
+        label, tier, provider, model, prompt_chars, max_tokens,
     )
     start = time.monotonic()
 
@@ -92,8 +106,8 @@ def chat(
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
     logger.info(
-        "%s ← %s/%s (response %d chars, %d ms)",
-        label, provider, model, len(content or ""), elapsed_ms,
+        "%s [%s] ← %s/%s (response %d chars, %d ms)",
+        label, tier, provider, model, len(content or ""), elapsed_ms,
     )
     return content
 

@@ -35,8 +35,12 @@ TOPICS_OF_INTEREST = """
 # 可选：anthropic | kimi | zhipu | deepseek | custom
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 
-# 留空则使用 llm.py 中各 provider 的默认模型
-MODEL = os.getenv("LLM_MODEL", "")
+# 模型分档：
+# - fast 档用于标题粗筛 / 机构推断（任务简单，要便宜快）
+# - strong 档用于摘要精排 / 深度精读（需要语义理解和打分判断）
+# 留空则使用 llm.py 中各 provider 的默认模型；旧 LLM_MODEL 会被当作 STRONG_MODEL 兼容。
+FAST_MODEL = os.getenv("FAST_MODEL", "")
+STRONG_MODEL = os.getenv("STRONG_MODEL", os.getenv("LLM_MODEL", ""))
 
 # ── 深度分析配置 ──────────────────────────────────────────────────────────────
 # 排名只用 relevance + novelty 两个 0-10 维度，总分上限 20。阈值 14 相当于 70%。
@@ -44,6 +48,11 @@ DEEP_ANALYSIS_MAX_PAPERS = int(os.getenv("DEEP_ANALYSIS_MAX_PAPERS", "3"))
 DEEP_ANALYSIS_MIN_TOTAL_SCORE = int(os.getenv("DEEP_ANALYSIS_MIN_TOTAL_SCORE", "14"))
 # 评分显示用的总分上限（相关性 0-10 + 新颖性 0-10）。
 TOTAL_SCORE_MAX = 20
+
+# ── 机构推断配置 ──────────────────────────────────────────────────────────────
+# 每篇论文独立调用 LLM 推断机构，这里控制并发上限。LLM API 通常允许 4-8 并发，
+# 同时也是 arXiv PDF 抓取的并发数；调高时注意 provider rate limit 与 arxiv 礼貌性。
+INSTITUTION_INFERENCE_CONCURRENCY = int(os.getenv("INSTITUTION_INFERENCE_CONCURRENCY", "4"))
 
 # ── 输出配置 ──────────────────────────────────────────────────────────────────
 OUTPUT_DIR = Path("reports")

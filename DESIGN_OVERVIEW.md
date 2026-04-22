@@ -2,40 +2,38 @@
 
 ## 1. 文档目的
 
-这份文档用于快速说明 `paper_radio` 当前的核心设计理念、关键模块分工、筛选与分析链路、已达成的设计决策，以及接下来继续演进时应遵守的原则。
+这份文档说明 `paper_radio` 当前的核心设计理念、模块分工、筛选与分析链路，以及继续演进时需要遵守的约束。
 
 目标读者：
 
-- 新 session 中的模型
-- 被压缩上下文后的继续协作者
-- 后续维护这套工具的人
+- 新 session 中继续协作的模型
+- 被压缩上下文后接手的人
+- 后续维护这套工具的开发者
 
-如果只看一页，需要记住这几个关键词：
+如果只看一段，记住这几个关键词：
 
-- `recent 页面优先`
-- `先抓全量，再逐层筛选`
-- `规则预筛 + LLM 粗筛 + LLM 精排`
-- `抓取快照 / 入选快照 / 最终日报` 三层输出
-- `重点论文才做重分析`
+- **recent 页面优先**
+- **先抓全量，再逐层筛选**
+- **规则预筛 + LLM 标题粗筛 + LLM 摘要精排**
+- **抓取快照 / 入选快照 / 最终日报** 三层 Markdown 输出
+- **机构推断和深度精读，只对最终 TOP K 做**
+- **数据用 dataclass，prompts 外部化，调用走统一 HTTP/日志层**
 
 ---
 
 ## 2. 项目目标
 
-`paper_radio` 不是一个通用论文爬虫，而是一个围绕用户研究偏好的“每日论文筛选与总结工具”。
+`paper_radio` 不是通用论文爬虫，而是一个围绕用户研究偏好的**每日 arXiv 论文筛选与摘要工具**。
 
-当前主要目标：
+主要功能：
 
-1. 从 arXiv 最近几天的新论文里抓取候选
-2. 按用户兴趣方向进行筛选、分类、排序
-3. 生成抓取快照、入选快照和最终摘要报告
-4. 对重点论文做更深层的分析，包括：
-   - 方法分析
-   - 贡献评价
-   - 影响力判断
-   - 作者顺序 / 机构合作关系判断
+1. 抓取 arXiv 最近几天的新论文
+2. 按用户兴趣方向做规则 + LLM 双重筛选并打分
+3. 输出抓取快照、入选快照、最终日报三层 Markdown
+4. 对总分达到阈值的少量论文做深度简报（方法介绍 / 贡献锐评 / 影响力预测）
+5. 仅对最终 TOP K 论文，用 PDF 首页文本驱动 LLM 做机构归一
 
-用户偏好重点领域当前包括：
+用户当前关注方向集中在 [`config.py`](config.py) 的 `TOPICS_OF_INTEREST`：
 
 - 端到端自动驾驶
 - 世界模型
@@ -43,553 +41,588 @@
 - 空间智能
 - 自动驾驶大模型
 
-这些定义集中在 [config.py](/Users/louis.zhang/Projects/paper_radio/config.py:26) 的 `TOPICS_OF_INTEREST`。
-
 ---
 
 ## 3. 核心设计理念
 
-### 3.1 recent 页面优先，而不是全依赖 arXiv API
+### 3.1 recent 页面优先，不依赖搜索 API 做"最近论文"查询
 
-关键决策：
-
-- “最近几天论文”这个需求，优先使用 arXiv 的 `recent` 页面
-- 不优先依赖搜索 API 做 recent 查询
+- "最近 N 天论文" 优先走 `https://arxiv.org/list/<category>/recent`
+- 不用搜索 API 做时间过滤
 
 原因：
 
-- `https://arxiv.org/list/<category>/recent` 本身就是 arXiv 官方面向用户展示“最近提交”的页面
-- 页面上已经按天分组，更符合“最近 N 个自然日”的产品语义
-- 搜索 API 更容易遇到限流、语法不稳定、时间过滤不直观等问题
+- recent 页面就是 arXiv 官方面向人类展示"最近提交"的入口，已按 announce 日期分组，更贴合"最近 N 个自然日"语义
+- 搜索 API 容易遇到限流、时间过滤不直观、语法变化等问题
+- arXiv API 仍然有用，但只用作 recent 抓取后的元数据补全（摘要、affiliation、真实 published 时间）
 
-当前实现：
+### 3.2 "最近 N 天"按本地自然日理解
 
-- recent 页面抓取在 [crawler.py](/Users/louis.zhang/Projects/paper_radio/crawler.py:144)
-- 覆盖范围探测在 [crawler.py](/Users/louis.zhang/Projects/paper_radio/crawler.py:176)
+- `--days 3` = "今天往回数 3 个自然日"，不是滚动 72 小时
+- 时间窗口在 [`crawler._calendar_day_range`](crawler.py) 用 `datetime.now()`（本地时间）算
+- 这样和 recent 页面 heading 上不带时区的 `Tue, 21 Apr 2026` 字符串保持一致，避免"抓到了但统计表对不上"的错位
 
-### 3.2 “最近 N 天”按自然日理解
+### 3.3 先抓全量，再逐层收缩
 
-关键决策：
+整个 pipeline 是一个不断缩小的漏斗：
 
-- `--days 3` 表示“今天往回数 3 个自然日”
-- 不是“滚动过去 72 小时”
+1. recent 页面抓全量候选
+2. 本地关键词规则**预筛**（不调 LLM）
+3. LLM **标题粗筛**（只发标题，省 token）
+4. LLM **摘要精排**（发摘要，给评分 + 一句话总结）
+5. 仅对 TOP K 做 **PDF 首页驱动的机构归一**
+6. 仅对总分达到阈值的少量论文做 **深度简报**
 
-原因：
-
-- 与 `recent` 页面按日期段展示的方式一致
-- 更符合日报和人工浏览习惯
-- 周六、周日没有论文时，应该明确显示为 0
-
-### 3.3 先抓全量，再逐层筛选
-
-当前思路不是一开始就强约束，而是分层收缩：
-
-1. 先抓 recent 页面上的全量候选
-2. 再用规则预筛缩小范围
-3. 再用 LLM 做标题粗筛
-4. 再用 LLM 做摘要精排
-5. 只对高价值论文做更重的分析
-
-这是整套系统最重要的设计思想之一：
-
-- 轻操作尽量前置
-- 重操作只留给少数重点论文
+总原则：**轻操作前置，重操作只留给少数高价值论文。**
 
 ### 3.4 不把所有判断都交给 LLM
 
-关键决策：
+- LLM 用于"语义判断"和"复杂关系推断"
+- 规则 / 代码用于"结构化筛选"、"兜底"、"标准化"、"排序"
 
-- LLM 用在“语义判断”和“复杂关系推断”
-- 规则和代码用在“结构化筛选”“兜底”“标准化”“排序”
+理由：LLM 有波动 + 贵，规则便宜稳定。所以是**规则 + LLM 混合**路线，不追求纯 LLM。
 
-原因：
+### 3.5 输出分层，不只输出最终一份报告
 
-- LLM 有波动
-- 纯 LLM 成本更高
-- 规则更便宜、更稳定
+三层 Markdown 输出，每层独立保存、可单独排查：
 
-所以当前系统采用“规则 + LLM 混合”路线。
+| 目录 | 文件 | 内容 |
+|---|---|---|
+| `reports/recent_crawls/` | `recent_crawl_YYYY-MM-DD.md` | 抓取快照（全量原始清单 + 每日统计） |
+| `reports/selected_papers/` | `selected_papers_YYYY-MM-DD.md` | 入选快照（精排后 TOP N + 评分 + 方向） |
+| `reports/` | `daily_report_YYYY-MM-DD.md` | 最终日报（TOP 10 + 机构 + 深度简报） |
 
-### 3.5 输出分层，而不是只有一份最终报告
+意义：抓取出问题查 recent_crawls，筛选出问题查 selected_papers，最终阅读看 daily_report。
 
-当前有三类输出：
+### 3.6 数据用 dataclass，少在 dict 里 `.get()`
 
-1. `recent_crawls`
-   原始抓取快照，偏事实清单
-2. `selected_papers`
-   入选论文快照，偏筛选结果与中间产物
-3. `daily_report`
-   最终摘要报告，偏用户阅读体验
+整条管线统一用 [`models.py`](models.py) 里的两个 dataclass 承载论文：
 
-这样做的意义：
+- `Paper`：从 arXiv 抓回来的基础元信息（含 `announced_date`）
+- `RankedPaper`：在 `Paper` 基础上多评分、机构归一字段
 
-- 抓取层出问题时可单独排查
-- 筛选层结果可以单独审阅
-- 最终日报可以专注“值得读什么”和“为什么”
+这样下游不用到处写 `paper.get("xxx", "")`，并且 `merge_non_empty` / `with_scores` / `with_institutions` 这些"返回新对象"的方法集中维护合并语义。
 
 ---
 
 ## 4. 当前目录与模块职责
 
-### 4.1 主流程模块
+### 4.1 入口
 
-- [main.py](/Users/louis.zhang/Projects/paper_radio/main.py:1)
-  主入口。串联抓取、筛选、作者机构分析、快照保存、最终报告生成。
+- [`main.py`](main.py)：主流程入口，串联抓取 → 排序 → 机构推断 → 写日报。`setup_logging()` 在最早一步初始化日志。
 
-### 4.2 数据抓取模块
+### 4.2 数据层
 
-- [crawler.py](/Users/louis.zhang/Projects/paper_radio/crawler.py:1)
-  负责：
-  - 抓 arXiv recent 页面
-  - 用 arXiv API 补摘要 / 作者 / affiliation
-  - 仅为后续重点论文分析提供 HTML 作者/机构上下文抓取能力
+- [`models.py`](models.py)：`Paper` / `RankedPaper` 两个 dataclass，以及类型转换工具（`_parse_atom_datetime` / `_normalize_arxiv_id` / `_coerce_int`）。
+- [`config.py`](config.py)：所有可调参数集中点，所有运行时配置都通过环境变量 override。
 
-### 4.3 排序模块
+### 4.3 抓取层
 
-- [ranker.py](/Users/louis.zhang/Projects/paper_radio/ranker.py:1)
-  负责：
-  - 规则预筛
-  - LLM 标题粗筛
-  - LLM 摘要精排
-  - 排名结果标准化
+- [`crawler.py`](crawler.py)：
+  - `fetch_papers()`：主流程入口，先抓 recent，再用 arXiv API 补元数据
+  - `fetch_recent_papers(enrich_metadata=False)`：测试脚本用的轻量版，不调 API
+  - `fetch_paper_by_id()`：按 ID 单篇抓取（测试 / 调试用）
+  - `get_recent_coverage()`：探测 recent 页面能覆盖到的最早日期
+- [`pdf_context.py`](pdf_context.py)：下载 PDF 并提取**整页第一页文本**给机构推断用。
+- [`fulltext.py`](fulltext.py)：抓 arXiv HTML 版本的 Introduction / Method 段落，给深度简报用。
 
-### 4.4 抓取快照渲染模块
+### 4.4 排序与机构推断
 
-- [recent_report.py](/Users/louis.zhang/Projects/paper_radio/recent_report.py:1)
-  负责：
-  - recent crawl 表格渲染
-  - 每日统计表
-  - Markdown 生成与保存
+- [`ranker.py`](ranker.py)：
+  - `_rule_prefilter`：本地关键词预筛
+  - `_stage1_filter`：LLM 标题粗筛
+  - `_stage2_rank`：LLM 摘要精排（产出 `RankedPaper`）
+  - `enrich_top_papers_with_institutions(top_k=10)`：仅对 TOP K 拉 PDF + LLM 推断机构
+  - `infer_paper_institutions`：单篇机构推断（测试脚本用）
 
-### 4.5 入选快照渲染模块
+### 4.5 LLM 抽象层
 
-- [selected_report.py](/Users/louis.zhang/Projects/paper_radio/selected_report.py:1)
-  负责：
-  - 入选论文表格
-  - 方向汇总
+- [`llm.py`](llm.py)：
+  - `chat(label=...)`：统一的 LLM 调用入口，前后打日志（provider / model / prompt 字符数 / 响应字符数 / 耗时 ms）
+  - `extract_json(required_keys=, list_roots=)`：从 LLM 回复中抠 JSON，支持必填字段校验和 list 根节点提升
+  - `get_active_model()`：给 reporter 展示当前模型用
+  - 多 provider 支持：anthropic 原生 + OpenAI 兼容（kimi / zhipu / deepseek / custom）
 
-### 4.6 最终日报模块
+### 4.6 Prompt 模板
 
-- [reporter.py](/Users/louis.zhang/Projects/paper_radio/reporter.py:1)
-  负责：
-  - TOP 10 速览
-  - TOP 10 详细卡片
-  - 对最终 TOP 10 补充机构展示
-  - 仅对达到阈值的论文做深度简报
+- [`prompts.py`](prompts.py)：基于 `string.Template` 的轻量渲染器，缓存模板对象，缺变量时显式抛 `MissingPromptVariableError`。
+- [`prompt_templates/*.txt`](prompt_templates/)：四个 LLM prompt
+  - `stage1_title_filter.txt`
+  - `stage2_abstract_rank.txt`
+  - `institution_inference.txt`
+  - `deep_analysis.txt`
 
-### 4.7 LLM 抽象层
+### 4.7 渲染层
 
-- [llm.py](/Users/louis.zhang/Projects/paper_radio/llm.py:1)
-  统一封装 provider 切换。
+- [`recent_report.py`](recent_report.py)：抓取快照（全量论文表 + 每日 announce 统计）
+- [`selected_report.py`](selected_report.py)：入选快照（按总分排序 + 方向汇总）
+- [`reporter.py`](reporter.py)：最终日报（TOP 10 速览表 + TOP 10 卡片 + 深度简报）
 
-### 4.8 配置层
+### 4.8 基础设施
 
-- [config.py](/Users/louis.zhang/Projects/paper_radio/config.py:1)
-  集中管理：
-  - 抓取配置
-  - 研究偏好
-  - 输出目录
-  - 深度分析阈值
+- [`http_client.py`](http_client.py)：进程内共享 `requests.Session`、统一 User-Agent、超时、重试 + 指数退避 + 抖动。所有抓取都走它（crawler / pdf_context / fulltext）。
+- [`logging_config.py`](logging_config.py)：`setup_logging()` 幂等初始化，默认 INFO，`PAPER_RADIO_LOG_LEVEL` 可改；urllib3 / openai / anthropic 等高频库压到 WARNING。
+- [`formatting.py`](formatting.py)：`fmt_authors` / `fmt_affiliations` / `escape_md_cell` / `clip` / `weekday_cn` / `arxiv_sort_key` 等展示层共用工具。
 
 ---
 
 ## 5. 抓取层设计
 
-### 5.1 recent 页面抓取是第一来源
+### 5.1 recent 页面是第一来源
 
-抓取流程：
+[`_scrape_recent_category`](crawler.py)：
 
-1. 对每个 category 访问 `https://arxiv.org/list/{category}/recent`
-2. 解析页面上的 `h3` 日期分组
+1. 访问 `https://arxiv.org/list/{category}/recent?show=2000`
+2. 解析 `h3` 日期标题（如 `Tue, 21 Apr 2026 (showing 100 of 100 entries)`）
 3. 在最近 N 个自然日范围内收集 `dt/dd` 条目
-4. 得到：
-   - `arxiv_id`
-   - `title`
-   - `authors`
-   - `categories`
-   - 基于日期段推断的 `published`
+4. 每条得到：`arxiv_id` / `title` / `authors` / `categories` / `announced_at`
+5. `announced_at.date()` 写入 `Paper.announced_date`，用于每日统计
 
 ### 5.2 arXiv API 只做元数据补全
 
-API 不是 recent 查询主入口，而是 recent 抓取后的补全层。
+[`_enrich_papers_with_api_metadata`](crawler.py)：
 
-主要补：
+- 把 recent 抓到的 ID 列表分批（默认 50/批）发给 arXiv API
+- 解析 Atom feed，补全：`abstract` / 完整 `authors` / `affiliations` / 真实 `published` 时间
+- 用 `Paper.merge_non_empty(other)` 做"非空字段覆盖"合并，**不会用空值擦掉 recent 阶段已有的 `announced_date`**
 
-- `abstract`
-- 更完整的 `authors`
-- `affiliations`
-- 更稳定的 `published`
+这是个有意为之的合并语义——任何阶段抓到的非空字段都视为更可信，不允许后续阶段用空值倒灌覆盖。
 
-### 5.3 affiliation 获取策略
+### 5.3 Affiliation 抓取分阶段
 
-当前设计是分阶段处理机构信息：
-
-1. 第一阶段全量抓取时，只使用 API 的 `<arxiv:affiliation>`
-2. 第二阶段只对少量高价值论文抓取 HTML 标题附近的作者/机构段落，交给 LLM 做关系判断
-
-这样设计的原因：
-
-- 第一阶段目标是轻、快、稳定
-- 不希望在全量候选上过早访问 HTML，增加请求成本
-- 机构评分可以在第二步精排时结合 API 结果完成
-- 更重的作者顺序 / 校企合作判断，只值得放在重点论文上做
+| 阶段 | 来源 | 范围 | 说明 |
+|---|---|---|---|
+| 全量抓取 | arXiv API 的 `<arxiv:affiliation>` | 所有候选 | 轻量、稳定，但很多论文 API 里没填 |
+| TOP K 增强 | PDF 首页文本 + LLM 归一 | 仅最终 TOP 10 | 重操作，留给真正展示在日报上的论文 |
 
 明确不做：
 
-- 第一阶段的 HTML affiliation 兜底
-- PDF 首页解析
+- 全量阶段抓 HTML 兜底 affiliation
+- 全量阶段解析 PDF
+- 第一阶段做作者顺序 / 校企合作判断
 
-### 5.4 HTML 作者机构上下文的边界
+### 5.4 PDF 首页文本提取
 
-当前 HTML 抓取不是为了给全量论文补结构化 affiliation，而是为了给重点论文提供额外语境。
+[`pdf_context.py`](pdf_context.py)：
 
-定位：
+- 用 `pypdf` 抽第一页全文
+- 行级清洗（去多余空白、压缩连续空行），整页保留
+- 字符数封顶 8000，给 LLM 做机构推断用
 
-- 用于辅助 LLM 判断作者顺序与合作关系
-- 用于补充 API 未显式表达的上下文线索
-- 不用于严格的作者-单位一一映射事实判定
+之前的版本只保留头 40 行 + 尾 20 行，会丢两栏排版里夹在中间的脚注 / affiliation；现在保留整页，靠 LLM 自己挑重要片段，只做体积裁剪。
 
 ---
 
 ## 6. 筛选与排序设计
 
-### 6.1 三层筛选结构
+### 6.1 三层筛选漏斗
 
-当前筛选结构：
+```
+全量候选
+  ↓ 规则预筛（本地关键词命中）
+  ↓ LLM 标题粗筛（仅 title + arxiv_id）
+  ↓ LLM 摘要精排（标题 + 作者 + 摘要 → 评分 + 一句话总结）
+TOP N
+```
 
-1. 本地规则预筛
-2. LLM 标题粗筛
-3. LLM 摘要精排
+### 6.2 规则预筛
 
-### 6.2 本地规则预筛
+[`_rule_prefilter`](ranker.py)：
 
-位置：
-
-- [ranker.py](/Users/louis.zhang/Projects/paper_radio/ranker.py:82)
-
-原理：
-
-- 拼接 `title + abstract + categories`
-- 用本地关键词表 `PREFILTER_KEYWORDS` 做低成本命中
-- 目的是先过滤掉明显不相关论文
-
-设计目标：
-
-- 降低第一轮 LLM 输入量
-- 提高稳定性
-- 节省 token
-
-注意：
-
-- 它不是最终判断
-- 只是“便宜地先缩小候选集合”
+- 拼接 `title + abstract + categories`，小写匹配 `PREFILTER_KEYWORDS`
+- 命中即保留；全量未命中时 fallback 取前 `STAGE1_KEEP * 2 = 60` 篇兜底
+- 目的：第一刀去掉明显不相关，降低 LLM 输入量
+- 当前 `PREFILTER_KEYWORDS` 还在代码里（见 §11.2）
 
 ### 6.3 第一阶段：LLM 标题粗筛
 
-位置：
+[`_stage1_filter`](ranker.py)：
 
-- [ranker.py](/Users/louis.zhang/Projects/paper_radio/ranker.py:84)
-
-策略：
-
-- 只发 `title + arxiv_id`
-- 让 LLM 根据用户兴趣方向挑相关论文
-
-不做的事：
-
-- 不在第一步做机构评分
-- 不在第一步做作者合作分析
-
-这是刻意设计的，因为第一步要轻、快、便宜。
+- 输入：候选论文的 `arxiv_id + title`
+- prompt：[`stage1_title_filter.txt`](prompt_templates/stage1_title_filter.txt)
+- 输出 JSON：`{"relevant_ids": [...]}`
+- 失败兜底：直接返回前 `STAGE1_KEEP = 30` 篇
 
 ### 6.4 第二阶段：LLM 摘要精排
 
-位置：
+[`_stage2_rank`](ranker.py)：
 
-- [ranker.py](/Users/louis.zhang/Projects/paper_radio/ranker.py:121)
+- 输入：标题 + 作者 + 摘要前 500 字
+- prompt：[`stage2_abstract_rank.txt`](prompt_templates/stage2_abstract_rank.txt)
+- 评分维度：`relevance_score` (0-10) + `novelty_score` (0-10) → `total_score` (0-20)
+- 输出字段：`rank` / `arxiv_id` / `relevance_score` / `novelty_score` / `total_score` / `topic_category` / `one_line_summary`
+- LLM 漏字段时由 [`_normalize_ranked_papers`](ranker.py) 做兜底（默认值 + 重排 rank）
+- 失败兜底：返回输入候选的前 `TOP_N = 10` 篇
 
-输入：
+**重要决策**：排序阶段不再有"机构分"维度。机构信息只是辅助阅读信号，不参与排名。
 
-- 标题
-- 作者
-- 摘要
+### 6.5 LLM 输出标准化
 
-输出字段：
+[`_normalize_ranked_papers`](ranker.py)：
 
-- `relevance_score`
-- `novelty_score`
-- `total_score`
-- `topic_category`
-- `one_line_summary`
-
-关键设计点：
-
-- 排序阶段不再引入机构评分
-- 机构推断只在最终 TOP 10 展示时补充
-
-### 6.5 排序结果标准化
-
-位置：
-
-- [ranker.py](/Users/louis.zhang/Projects/paper_radio/ranker.py:46)
-
-为什么需要：
-
-- LLM 有时会漏字段
-- 分数格式可能不统一
-- rank 可能乱
-
-当前标准化做的事：
-
-- 分数字段转整数
-- `total_score` 缺失时自动补
-- `topic_category` 缺失时补 `未分类`
 - `one_line_summary` 缺失时用摘要首句或标题兜底
-- 最后按分数重新排序并重写 rank
+- `rank == 0` 时按出现顺序补 `rank`
+- 按 `(total_score, arxiv_id)` 重排，重写 `rank`
+
+理由：LLM 有时漏字段、给的 `rank` 乱、`total_score` 缺失，代码层必须有兜底。
 
 ---
 
-## 7. 作者/机构关系分析设计
+## 7. 机构归一设计
 
-### 7.1 为什么要引入 LLM
+### 7.1 设计目标
 
-用户关心的不只是“有哪些机构”，还关心：
+- 用户日报上要展示"哪些机构合作了这篇"
+- arXiv API 的 `<arxiv:affiliation>` 经常空缺
+- 大多数论文不值得为这一个字段去抓 PDF + 调 LLM
 
-- 第一作者是否像主要执行者
-- 末位作者是否像 PI / 老板
-- 校企合作更像实习合作还是毕业后入职
-- 是否存在多机构联合
+所以机构推断在当前架构里被收缩为：**仅对最终 TOP 10 做**。
 
-这些判断不适合纯规则硬推。
+### 7.2 流程
 
-### 7.2 为什么不在抓取阶段做
+[`enrich_top_papers_with_institutions(top_k=10)`](ranker.py) **每篇独立调用 + 并行**：
 
-关键决策：
+1. 用 `ThreadPoolExecutor`（默认并发 `INSTITUTION_INFERENCE_CONCURRENCY = 4`）跑 K 个 worker
+2. 每个 worker 处理一篇论文：
+   - `fetch_pdf_first_page_context` 抽 PDF 首页文本
+   - 用 [`institution_inference.txt`](prompt_templates/institution_inference.txt) 渲染**单论文 prompt**
+   - 调一次 `chat()`，输出**单个 JSON 对象**
+3. 输出字段：
+   - `normalized_institutions`：归一后的机构列表
+   - `institution_types`：`university | company | research_lab | mixed | unknown`
+   - `institution_summary`：一句中文简述
+   - `evidence_source`：`api | pdf | api+pdf | unknown`
+4. 单篇失败（PDF 抓不到 / LLM 报错）只影响那一篇，其它论文照常完成
 
-- 不对所有抓取论文都做作者/机构关系分析
-- 只对最终少量高价值论文做
+刻意选择"逐篇 + 并行"而不是"打包成一个大 prompt 一次调用"：
 
-原因：
+- 单 prompt 体积可控，避免 10 × 8000 字符 PDF 文本超长上下文
+- 单篇失败不连累其它
+- 调用并发受同一上限保护，对 arxiv PDF 和 LLM provider 都比较礼貌
+- 跨篇归一一致性的损失在可接受范围（机构名都是常见缩写，单论文也能归对）
 
-- HTML 抓取有网络成本
-- LLM 分析有调用成本
-- 大多数候选论文不值得做这层重分析
+### 7.3 粒度约束
 
-### 7.3 当前做法
+机构识别到 **学校 / 公司 / 研究机构** 层级，不分析到学院 / 系 / 实验室。
 
-当前版本已经不再在主流程里做作者顺序 / 合作关系判断。
+### 7.4 输出位置
 
-机构相关的重分析被收缩为：
-
-1. 排序阶段不做机构评分
-2. `selected_papers` 不展示机构字段
-3. 仅在最终日报前，对 TOP 10 论文做一次 PDF 首页驱动的机构推断
-
-### 7.4 粒度要求
-
-当前机构推断要求 LLM：
-
-- 机构识别到学校 / 公司 / 研究机构层级
-- 不分析到学院、系、实验室层级
-
-### 7.5 输出位置
-
-这部分结果目前写在：
-
-- `selected_papers_YYYY-MM-DD.md` 的 `作者/机构关系判断` 章节
-
-原因：
-
-- 比放进表格更易读
-- 这类判断带推测性，不宜伪装成硬字段
+- TOP 10 速览表：`机构` 列展示 `normalized_institutions`
+- TOP 10 详细卡片：同上
+- `selected_papers` 快照**不展示机构**——它是给筛选层调试用的
 
 ---
 
 ## 8. 深度简报设计
 
-### 8.1 不再固定分析前 3 篇
+### 8.1 阈值 + 上限
 
-关键决策：
+配置在 [`config.py`](config.py)：
 
-- 不再写死 `TOP 3`
-- 改成“达到阈值的论文，最多分析 K 篇”
+- `DEEP_ANALYSIS_MAX_PAPERS = 3`
+- `DEEP_ANALYSIS_MIN_TOTAL_SCORE = 14`（总分上限 20，相当于 70%）
 
-原因：
+逻辑：
 
-- 有些天可能没有真正值得精读的论文
-- 固定分析 3 篇会显得机械
+- 总分 < 阈值的论文不做精读（哪怕排进 TOP 10）
+- 达到阈值的论文最多分析 `DEEP_ANALYSIS_MAX_PAPERS` 篇
+- 当天没有达标论文时，报告里明确写"今日没有达到精读阈值的论文，因此不生成深度分析"
 
-### 8.2 当前策略
+### 8.2 输入
 
-配置在 [config.py](/Users/louis.zhang/Projects/paper_radio/config.py:59)：
+[`_deep_analysis`](reporter.py)：
 
-- `DEEP_ANALYSIS_MAX_PAPERS = 5`
-- `DEEP_ANALYSIS_MIN_TOTAL_SCORE = 20`
+- 优先用 [`fulltext.fetch_sections`](fulltext.py) 抓 arXiv HTML 版本的 Introduction / Method 章节
+- 失败时降级到摘要
+- prompt：[`deep_analysis.txt`](prompt_templates/deep_analysis.txt)
 
-也就是：
+### 8.3 输出三段式
 
-- 总分低于阈值，不做精读
-- 达到阈值的论文，最多精读 5 篇
+LLM 直接输出 Markdown，三段：
 
-### 8.3 当天没有论文达标时
+- **方法介绍**：3-4 句，强调具体模块 / 架构设计
+- **贡献锐评**：2-3 句，犀利点出潜在局限
+- **影响力预测**：1 句
 
-报告里会明确写：
-
-- 今日没有达到精读阈值的论文，因此不生成深度分析
+Anthropic 后端会启用 `thinking=adaptive`，其它 provider 直接生成。
 
 ---
 
-## 9. 输出文档设计
+## 9. LLM 抽象层
 
-### 9.1 输出目录分层
+### 9.1 模型分两档：fast / strong
 
-当前输出目录：
+不同 LLM 任务的难度差很多，所以系统按 tier 选模型：
 
-- `reports/`
-  - 最终日报
-- `reports/recent_crawls/`
-  - 抓取快照
-- `reports/selected_papers/`
-  - 入选论文快照
+| tier | 用途 | 调用点 |
+|---|---|---|
+| `fast` | 标题粗筛、机构归一（结构化任务） | `_stage1_filter` / `_infer_one_paper_institution` |
+| `strong` | 摘要精排、深度精读（需要语义判断 + 评分） | `_stage2_rank` / `_deep_analysis` |
 
-### 9.2 文件命名原则
+调用方写 `chat(..., tier="fast")` 或 `chat(..., tier="strong")`（默认 strong），底层 `_get_settings(tier)` 把档位翻译成具体模型名。
 
-抓取快照：
+### 9.2 多 provider × 两档默认
 
-- `recent_crawl_YYYY-MM-DD.md`
+[`PROVIDERS`](llm.py) 注册表（每个 provider 同时定义 fast / strong 两档默认模型）：
 
-入选快照：
+| provider | base_url | fast 默认 | strong 默认 | API key 环境变量 |
+|---|---|---|---|---|
+| anthropic | （SDK 默认）| `claude-haiku-4-5` | `claude-opus-4-6` | `ANTHROPIC_API_KEY` |
+| kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-32k` | `kimi-k2.5` | `MOONSHOT_API_KEY` |
+| zhipu | `https://open.bigmodel.cn/api/paas/v4/` | `glm-4-flash` | `glm-4-plus` | `ZHIPU_API_KEY` |
+| deepseek | `https://api.deepseek.com/v1` | `deepseek-chat` | `deepseek-reasoner` | `DEEPSEEK_API_KEY` |
+| custom | `LLM_BASE_URL` | `FAST_MODEL` env | `STRONG_MODEL` env | `LLM_API_KEY` |
 
-- `selected_papers_YYYY-MM-DD.md`
+环境变量覆盖优先级（每档独立）：
 
-最终日报：
+```
+config.FAST_MODEL  > PROVIDERS[provider][1]   # fast 档
+config.STRONG_MODEL > PROVIDERS[provider][2]  # strong 档
+```
 
-- `daily_report_YYYY-MM-DD.md`
+旧的 `LLM_MODEL` 环境变量被当作 `STRONG_MODEL` 兼容值，不影响 fast 档默认。
 
-设计原则：
+### 9.3 调用可观测性
 
-- 按天命名
-- 同一天重复运行覆盖
+`chat(messages, tier=, label=...)` 在每次调用前后打结构化日志，把档位也带上：
+
+```
+HH:MM:SS INFO    llm | stage1_title_filter [fast]   → kimi/moonshot-v1-32k (prompt 12345 chars, max_tokens=16000)
+HH:MM:SS INFO    llm | stage1_title_filter [fast]   ← kimi/moonshot-v1-32k (response 1234 chars, 3456 ms)
+HH:MM:SS INFO    llm | stage2_abstract_rank [strong] → kimi/kimi-k2.5 (prompt 23456 chars, max_tokens=8000)
+HH:MM:SS INFO    llm | stage2_abstract_rank [strong] ← kimi/kimi-k2.5 (response 4567 chars, 18234 ms)
+```
+
+每个 LLM 调用点都传了独立的 `label`，方便聚合统计哪步耗时长 / 失败率高。
+
+### 9.4 OpenAI 兼容后端的过载重试
+
+[`_openai_compat_chat`](llm.py) 处理 `engine_overloaded` finish_reason，重试 3 次，间隔 `15 * attempt` 秒，超过抛 `RuntimeError`。
+
+### 9.5 JSON 抽取
+
+`extract_json(required_keys=, list_roots=)`：
+
+1. 剥 ``` / ```json code fence
+2. 整段 `json.loads`，失败则定位最外层 `{...}` / `[...]` 重试
+3. 顶层 array 自动包装成 `{"items": [...]}`
+4. `list_roots=("relevant_ids",)` 等：把第一个命中的 list 字段同步到 `items`，调用方既能写 `data["relevant_ids"]` 也能写 `data["items"]`
+5. `required_keys=(...)` 缺失时抛 `ValueError`
+
+---
+
+## 10. Prompt 模板系统
+
+### 10.1 为什么外移
+
+之前 prompt 散在 `ranker.py` / `reporter.py` 的 f-string 里，存在的问题：
+
+- prompt 长度变大后影响代码可读性
+- 改 prompt 必须改代码
+- 多 prompt 共用变量没法集中维护
+- 没有"模板缺变量"的兜底
+
+现在统一放在 `prompt_templates/*.txt`，业务代码只剩调用：
+
+```python
+prompt = prompts.render(
+    "stage2_abstract_rank",
+    topics_of_interest=TOPICS_OF_INTEREST,
+    paper_blocks=blocks,
+    total_score_max=TOTAL_SCORE_MAX,
+    top_n=TOP_N,
+)
+```
+
+### 10.2 模板语法
+
+用 Python 内建的 `string.Template`：
+
+- 占位符**统一用 `${var}` 形式**（不用 `$var`）
+- `safe_substitute` 让漏变量不直接挂掉，渲染后再统一兜底
+
+### 10.3 LaTeX 兼容
+
+arXiv 论文标题 / 摘要里经常出现 `$T$` / `$\pi_{0.7}$` / `$X_2$` 这类 LaTeX 数学。`string.Template` 默认会把 `$T` 也当占位符。
+
+处理方式：
+
+- `safe_substitute` 只处理"模板"侧的占位符，**不会碰注入进来的值**，所以 LaTeX 公式自动原样保留
+- `_find_unfilled` 只扫 `${var}` 形式的残留，**不扫 `$var`**，避免把用户内容里的 `$T` 误判成"缺变量"
+- 项目硬约定：模板里只用 `${var}`，不用 `$var`
+
+漏变量真出现时，`render()` 会抛 `MissingPromptVariableError`，提示 `prompt 模板 'xxx' 缺少变量：[...]`。
+
+### 10.4 缓存
+
+模板按 `name` 进程内缓存（`_cache: Dict[str, Template]`），改完模板需要重启进程。这是静态资产，可以接受。
+
+---
+
+## 11. 输出层设计
+
+### 11.1 文件命名约定
+
+- `recent_crawl_YYYY-MM-DD.md`：抓取快照
+- `selected_papers_YYYY-MM-DD.md`：入选快照
+- `daily_report_YYYY-MM-DD.md`：最终日报
+
+约定：
+
+- 按天命名，同一天重复运行覆盖
 - 不在文件名里塞 category，保持稳定路径
+- 三层目录平级（`reports/recent_crawls/` / `reports/selected_papers/` / `reports/`）
 
-### 9.3 为什么要保留中间快照
+### 11.2 日期口径
 
-原因：
+- 抓取快照"每日统计"按 `Paper.announced_date`（recent 页面 heading 日期）分桶
+- 不再二次过滤窗口（窗口由 crawler 一处算定，渲染层只做聚合）
+- TOP 10 卡片"提交"列展示 `published_day`（API 返回的真实提交时间）
 
-- 便于排查“抓到了什么”
-- 便于核对“为什么选了这些”
-- 便于把“抓取问题”和“排序问题”分开调试
+这两个日期分开，是为了让用户看每日产出量时和 arXiv 自己的"今天的 listing"一致。
 
----
+### 11.3 表格样式
 
-## 10. 当前已实现的重要体验细节
-
-这些是已经确认过的设计要求：
-
-- recent crawl 的论文表格按 `arXiv ID` 排序
-- recent crawl 表格展示：
-  - 完整标题
-  - 作者
-  - 机构
-  - Subjects（缩写）
-  - URL
-  - 发布时间
-- 每日统计显示：
-  - 自然日
-  - 总量
-  - 各分类数量
-- 当查询天数超出 `recent` 页最早覆盖日期时，明确提示用户
-- `selected_papers` 的“一句话总结”不做截断
-- 机构信息仅在最终日报的 TOP 10 中展示
+- 所有表格走 [`render_table`](recent_report.py)，对齐 + 转义 `|` / 换行
+- TOP 10 速览表分数显示为 `{score}/{TOTAL_SCORE_MAX}`，跟随配置动态变化
+- `selected_papers` 表格不截断"一句话总结"
 
 ---
 
-## 11. 关键未决与后续建议
+## 12. 基础设施层
 
-### 11.1 PDF 首页机构抽取仍可继续增强
+### 12.1 HTTP 层
 
-当前机构推断已经收缩到仅对 TOP 10 做，但 PDF 首页证据仍然有进一步提升空间。
+[`http_client.py`](http_client.py)：
 
-建议后续做法：
+- 进程内单例 `requests.Session`（连接复用 + cookie 复用）
+- 统一 User-Agent：`paper-radio/1.0 (+...; research tool)`
+- 超时 / 重试次数 / 退避基数全走 `config`（环境变量可调）
+- 重试触发：连接异常 / 超时 / 状态码 ∈ `{408, 425, 429, 500, 502, 503, 504}`
+- 4xx（除上面几个）直接抛错，不当抖动重试
+- 指数退避 + 抖动：`base * 2^(attempt-1) + uniform(0, base)`
 
-- 将 PDF 首页拆成标题区块与页底脚注候选分别输入
-- 增加邮箱、版权声明、基金信息的清洗规则
-- 强化 footnote / affiliation 模式识别
-- 视效果决定是否引入带坐标信息的 PDF 解析库
+`get_text` / `get_bytes` 是上层 helpers，crawler / fulltext / pdf_context 全部统一走这里。
 
-### 11.2 规则预筛关键词应迁移到配置
+### 12.2 日志
 
-当前 `PREFILTER_KEYWORDS` 还在代码里。
+[`logging_config.py`](logging_config.py)：
 
-后续可迁移到：
+- `setup_logging()` 幂等初始化，CLI 和测试脚本入口处调一次
+- 默认 INFO，`PAPER_RADIO_LOG_LEVEL=DEBUG` 可放大
+- 格式：`HH:MM:SS LEVEL  module | message`
+- 第三方库（urllib3 / httpx / openai / anthropic）压到 WARNING
 
-- `config.py`
+业务代码统一 `logger = logging.getLogger(__name__)`，**禁止在内部模块用 `print`**。`main.py` 里的 `print` 是用户面 banner / 进度，可以保留。
 
-好处：
+### 12.3 配置
 
-- 调整偏好无需改代码
-- 更适合长期维护
+[`config.py`](config.py) 是唯一的配置入口：
 
-### 11.3 增加“降权黑名单关键词”
+- 抓取相关：`FETCH_CATEGORIES` / `DAYS_BACK` / `ARXIV_PAGE_SIZE` / `REQUEST_*`
+- 排序相关：`MAX_PAPERS_TO_RANK` / `TOPICS_OF_INTEREST` / `TOTAL_SCORE_MAX`
+- LLM 相关：`LLM_PROVIDER` / `MODEL`
+- 深度分析：`DEEP_ANALYSIS_MAX_PAPERS` / `DEEP_ANALYSIS_MIN_TOTAL_SCORE`
+- 输出目录：`OUTPUT_DIR` / `CRAWL_OUTPUT_DIR` / `SELECTED_OUTPUT_DIR`
 
-除了正向兴趣关键词，还应增加一组“降权关键词”。
+所有运行时参数都通过环境变量 override（`os.getenv(..., default)`）。`.env` 文件在 `main.py` 最开头由 `python-dotenv` 加载。
 
-设计意图：
+---
 
-- 命中这些方向时，不直接过滤论文
-- 但如果论文的方法或贡献点明显围绕这些方向，应降低排序权重
+## 13. 端到端调用链
 
-当前已记录的候选关键词：
+```
+main.py
+  └─ setup_logging()
+  └─ calendar_day_range(args.days)
+  └─ fetch_papers(days, categories)             # crawler
+        ├─ _scrape_recent_category(...)         # http_client.get_text
+        ├─ _dedupe_papers (merge_non_empty)
+        └─ _enrich_papers_with_api_metadata     # http_client.get_bytes
+  └─ summarize_daily_counts(papers)             # recent_report
+  └─ save_recent_crawl_report(...)              # recent_report
+  └─ rank_papers(papers)                        # ranker
+        ├─ _rule_prefilter
+        ├─ _stage1_filter                       # llm.chat + extract_json
+        └─ _stage2_rank                         # llm.chat + extract_json
+              └─ _normalize_ranked_papers
+  └─ save_selected_report(...)                  # selected_report
+  └─ enrich_top_papers_with_institutions(top_k=10)  # ranker
+        ├─ fetch_pdf_first_page_context (×10)   # pdf_context + http_client
+        └─ _stage_infer_institutions            # llm.chat + extract_json
+  └─ generate_report(ranked)                    # reporter
+        └─ _deep_analysis (×K, K ≤ 3)
+              ├─ fulltext.fetch_sections        # http_client
+              └─ llm.chat (deep_analysis)
+```
 
-- `V2X`
-- `V2V`
-- `Drone Racing`
-- `Remote Sensing`
+---
 
-建议实现方式：
+## 14. 维护原则
 
-- 放在摘要精排附近，而不是规则预筛阶段一刀切
-- 区分“只是背景提及”与“核心方法/贡献相关”
-- 通过 penalty score 影响最终排序，而不是直接丢弃
+后续继续改这套工具时尽量遵守：
 
-### 11.4 crawler 仍可继续拆分
+1. **recent 页面仍是"最近论文"的第一来源**，arXiv API 只做补全
+2. **重操作（PDF / 深度精读）只对少量论文做**，机构推断只对 TOP K
+3. **规则用于降本和稳定，LLM 用于复杂语义判断**
+4. **中间快照（recent_crawls / selected_papers）不要删**，是可观察性的关键
+5. **对 LLM 输出要有代码兜底**——`_normalize_ranked_papers` / `extract_json` 的 list_roots / required_keys 等都是这层兜底
+6. **数据结构改动统一在 `models.py`**，不要在调用层私自加字段
+7. **新增 LLM 调用必须传 `label=` 和 `tier=`**，便宜任务用 `tier="fast"`，复杂任务用 `tier="strong"`
+8. **新增 prompt 必须落到 `prompt_templates/*.txt`**，业务代码不写裸 prompt 字符串
+9. **HTTP 抓取统一走 `http_client`**，不要在新模块里 `requests.get`
+10. **机构信息是辅助信号**，不要重新引入它作为排名维度
+11. **推测类信息（机构、作者关系）必须明确是"判断"而非"事实"**
 
-当前 `crawler.py` 职责偏多，后续可以拆成：
+---
+
+## 15. 已知未决与后续方向
+
+### 15.1 PDF 首页机构抽取仍可继续提升
+
+- 拆"标题区"和"页底脚注候选"分别送 LLM
+- 加邮箱 / 版权声明 / 基金信息的清洗规则
+- 视效果决定是否引入带坐标信息的 PDF 解析库（pdfplumber 等）
+
+### 15.2 `PREFILTER_KEYWORDS` 应迁移到 `config.py`
+
+当前还硬编码在 `ranker.py` 顶部。迁到 `config.py` 后，调整偏好不需要改业务代码。
+
+### 15.3 增加"降权关键词"
+
+除了正向关键词，可以增加一组"命中即降权"的负向关键词，例如：`V2X` / `V2V` / `Drone Racing` / `Remote Sensing`。
+
+实现要点：
+
+- 不直接丢弃，只降权
+- 区分"背景提及"和"核心方法 / 贡献相关"
+- 在摘要精排阶段附加 penalty score，而不是在规则预筛阶段一刀切
+
+### 15.4 `crawler.py` 仍可继续拆
+
+当前 `crawler.py` 同时承担：recent HTML 抓取 + API XML 解析 + 元数据补全 + 单篇查询 + coverage 探测。后续可以拆成：
 
 - `recent_fetcher`
 - `api_metadata_enricher`
 - `paper_lookup`
 
-### 11.5 作者关系分析可进一步结构化
+### 15.5 作者关系 / 校企合作判断
 
-当前是自由文本判断。
+旧版有过"作者顺序 / 合作类型"的 LLM 分析，目前主流程已不做。如果后续要重启，建议放在最终 TOP K 这一层，并输出半结构化字段（首作角色 / 末作角色 / 合作类型 / 主要机构 / 不确定点）而非自由文本。
 
-后续可改成半结构化字段：
+### 15.6 测试与单测
 
-- 第一作者角色判断
-- 末位作者角色判断
-- 合作类型判断
-- 主要机构列表
-- 不确定点
+当前只有 `test_author_affiliation_inference.py` / `test_crawler_recent.py` 两个端到端脚本。后续可以补：
 
----
-
-## 12. 维护时的硬原则
-
-后续继续改这套工具时，尽量遵守这些原则：
-
-1. recent 页面仍应是“最近论文”的第一来源  
-2. 重分析只对少量重点论文做  
-3. 规则用于降本和稳定，LLM 用于复杂语义判断  
-4. 中间快照不要删，它们是可观察性的关键  
-5. 对 LLM 输出要有代码兜底，不要直接信任  
-6. 用户真正关心的是“方向相关性”，机构只是辅助信号  
-7. 推测类信息必须明确是“判断”而不是“事实”  
+- `prompts.render` 的单测（LaTeX / 缺变量 / 缓存）
+- `extract_json` 的单测（容错路径）
+- `models.Paper.merge_non_empty` 的单测（合并语义）
+- `_normalize_ranked_papers` 的单测（兜底逻辑）
 
 ---
 
-## 13. 一句话总结
+## 16. 一句话总结
 
-`paper_radio` 当前的正确理解方式不是“一个爬虫脚本”，而是：
+`paper_radio` 当前不是"一个爬虫脚本"，而是：
 
-一个以 arXiv recent 为输入、以用户研究偏好为核心、通过“规则预筛 + LLM 语义筛选 + 重点论文深度分析”逐层收缩的信息筛选系统。
+**一个以 arXiv recent 页面为输入、以用户研究偏好为核心、通过"规则预筛 + LLM 标题粗筛 + LLM 摘要精排 + TOP K 机构归一 + 阈值过滤的深度精读"逐层收缩的论文筛选与摘要系统；数据用 dataclass 串联，prompt 模板外部化，HTTP / 日志 / LLM 调用走统一基础设施层。**

@@ -50,8 +50,11 @@ def _deep_analysis(paper: RankedPaper) -> str:
     use_thinking = LLM_PROVIDER == "anthropic"
     return chat(
         [{"role": "user", "content": prompt}],
-        max_tokens=6000,
+        # 三段 Markdown 输出实际只有 ~1500 tokens，给 16000 主要为 reasoning 模型
+        # 的思考链预留空间（thinking 模式下 anthropic / kimi 都会额外消耗）。
+        max_tokens=16000,
         thinking=use_thinking,
+        tier="strong",
         label="deep_analysis",
     ).strip()
 
@@ -62,13 +65,15 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines: List[str] = []
 
-    active_model = get_active_model()
+    fast_model = get_active_model("fast")
+    strong_model = get_active_model("strong")
 
     lines += [
         f"# 📡 每日论文摘要 | {today_str}",
         "",
         "> **关注领域**：端到端自动驾驶 · 世界模型 · VLA 模型 · 空间智能 · 自动驾驶大模型",
         f"> **精选论文**：{len(ranked_papers)} 篇 | 来源：arXiv cs.CV / cs.RO",
+        f"> **模型**：粗筛/机构 `{fast_model}` · 精排/精读 `{strong_model}`",
         "",
         "---",
         "",
@@ -125,7 +130,7 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
         (
             f"*以下最多分析 {DEEP_ANALYSIS_MAX_PAPERS} 篇，"
             f"仅纳入总分 >= {DEEP_ANALYSIS_MIN_TOTAL_SCORE} 的论文；"
-            f"由 `{active_model}` 基于摘要或正文节选生成*"
+            f"由 `{strong_model}` 基于摘要或正文节选生成*"
         ),
         "",
     ]
@@ -156,5 +161,5 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
             "",
         ]
 
-    lines += [f"*本报告由 `{active_model}` 自动生成 · {now_str}*"]
+    lines += [f"*本报告由 `{strong_model}` 自动生成 · {now_str}*"]
     return "\n".join(lines)
