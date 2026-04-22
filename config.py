@@ -95,6 +95,23 @@ VENUE_BONUS = int(os.getenv("VENUE_BONUS", "4"))
 # 超过预算的 bonus 会被截断。penalty 不受此封顶限制（降权另算）。
 BONUS_BUDGET = TOTAL_SCORE_MAX - RAW_SCORE_MAX
 
+# ── 主题黑名单降权（不剔除，只压分，保留审计痕迹）────────────────────────────
+# 关键词命中范围：论文 title + abstract；匹配 case-insensitive + word boundary，
+# 支持简单复数（UAV / UAVs 都命中，但 V2V 不会误伤 v2vnet 这类连写）。
+# 词组（含空格）原样匹配，缩写按严格 word boundary 匹配。
+BLACKLIST_KEYWORDS = [
+    "Drone Racing",
+    "V2V",
+    "V2X",
+    "Remote Sensing",
+    "UAV",
+    "Quadrotor",
+]
+# 每命中一个关键词降多少分（不区分 title 还是 abstract，不按出现次数叠加）
+PENALTY_PER_HIT = int(os.getenv("PENALTY_PER_HIT", "6"))
+# 单篇 penalty 累计封顶（防止几个关键词撞车直接拉到负分）
+PENALTY_CAP = int(os.getenv("PENALTY_CAP", "12"))
+
 # ── 机构推断配置 ──────────────────────────────────────────────────────────────
 # 每篇论文独立调用 LLM 推断机构，这里控制并发上限。LLM API 通常允许 4-8 并发，
 # 同时也是 arXiv PDF 抓取的并发数；调高时注意 provider rate limit 与 arxiv 礼貌性。
