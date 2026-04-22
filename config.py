@@ -71,6 +71,30 @@ DEEP_ANALYSIS_MIN_TOTAL_SCORE = int(os.getenv("DEEP_ANALYSIS_MIN_TOTAL_SCORE", "
 TOP_DISPLAY_MIN_SCORE = int(os.getenv("TOP_DISPLAY_MIN_SCORE", "18"))
 TOP_DISPLAY_MIN_COUNT = int(os.getenv("TOP_DISPLAY_MIN_COUNT", "5"))
 
+# ── 加分规则（在 stage2 LLM 打分之后叠加，受 BONUS_BUDGET 硬封顶）────────────
+# 重点关注作者：姓名 → 机构关键词列表（姓名 / 关键词都 case-insensitive）
+# 需要"姓名命中 AND 机构关键词命中"才算，避免同名误伤。
+# 机构关键词会对 normalized_institutions + affiliations + institution_summary 做 substring 匹配，
+# 所以写几个变体即可（英文缩写 + 全称 + 中文名都可）。
+FEATURED_AUTHORS = {
+    "Hongyang Li": ["HKU", "University of Hong Kong", "香港大学"],
+    "Hao Zhao":    ["Tsinghua", "THU", "清华"],
+    "Hang Zhao":   ["Tsinghua", "THU", "清华"],
+}
+# 每命中一位 featured author 加多少分
+AUTHOR_BONUS_PER_HIT = int(os.getenv("AUTHOR_BONUS_PER_HIT", "3"))
+# 同一篇 author_bonus 累计封顶（防止"四位 featured author 同台"直接冲顶）
+AUTHOR_BONUS_CAP = int(os.getenv("AUTHOR_BONUS_CAP", "6"))
+
+# 顶级会议列表（命中 arXiv comments 即视为录用）。命名按学术社区习惯。
+FEATURED_VENUES = ["CVPR", "ICCV", "NeurIPS", "ICLR", "ECCV", "ICML", "CoRL", "RSS"]
+# 单篇命中顶会加多少分（不叠加，同一篇命中多个也只加一次）
+VENUE_BONUS = int(os.getenv("VENUE_BONUS", "4"))
+
+# 总 bonus 硬封顶 = TOTAL_SCORE_MAX - RAW_SCORE_MAX
+# 超过预算的 bonus 会被截断。penalty 不受此封顶限制（降权另算）。
+BONUS_BUDGET = TOTAL_SCORE_MAX - RAW_SCORE_MAX
+
 # ── 机构推断配置 ──────────────────────────────────────────────────────────────
 # 每篇论文独立调用 LLM 推断机构，这里控制并发上限。LLM API 通常允许 4-8 并发，
 # 同时也是 arXiv PDF 抓取的并发数；调高时注意 provider rate limit 与 arxiv 礼貌性。

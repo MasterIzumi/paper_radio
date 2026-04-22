@@ -134,6 +134,18 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
     # ── 重点论文详细卡片 ──────────────────────────────────────────────────────
     lines += [f"## 📋 重点论文列表（{n} 篇）", ""]
     for i, paper in enumerate(top_display, 1):
+        score_bits = [
+            f"总分 {paper.total_score}/{TOTAL_SCORE_MAX}",
+            f"相关性 {paper.relevance_score}",
+            f"新颖性 {paper.novelty_score}",
+        ]
+        if paper.author_bonus:
+            score_bits.append(f"作者 +{paper.author_bonus}")
+        if paper.venue_bonus:
+            score_bits.append(f"顶会 +{paper.venue_bonus}")
+        if paper.penalty:
+            score_bits.append(f"降权 -{paper.penalty}")
+
         lines += [
             f"### {i}. {paper.title or 'N/A'}",
             "",
@@ -141,7 +153,11 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
             f"- **作者**: {fmt_authors(paper.authors)}",
             f"- **机构**: {fmt_affiliations(paper)}",
             f"- **方向**: {paper.topic_category or '—'} | **提交**: {paper.published_day or 'N/A'}",
-            f"- **评分**: 总分 {paper.total_score}/{TOTAL_SCORE_MAX} · 相关性 {paper.relevance_score} · 新颖性 {paper.novelty_score}",
+            f"- **评分**: {' · '.join(score_bits)}",
+        ]
+        if paper.bonus_reasons:
+            lines.append(f"- **加分原因**: {'; '.join(paper.bonus_reasons)}")
+        lines += [
             f"- **摘要**: {paper.one_line_summary or '—'}",
             "",
         ]

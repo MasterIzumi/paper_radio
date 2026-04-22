@@ -26,6 +26,7 @@ from ranker import (
     run_stage2_rank,
 )
 from reporter import generate_report
+from score_adjust import apply_score_adjustments
 from selected_report import save_selected_report
 
 
@@ -109,6 +110,9 @@ def main():
     print("     对 selected 论文进行摘要精排...")
     ranked = run_stage2_rank(enriched)
     print(f"     精排完成，共 {len(ranked)} 篇论文拿到分数")
+
+    print("     叠加 featured author / 顶会录用加分...")
+    ranked = apply_score_adjustments(ranked)
 
     selected_snapshot_path = save_selected_report(
         output_dir=config.SELECTED_OUTPUT_DIR,

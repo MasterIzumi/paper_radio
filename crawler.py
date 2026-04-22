@@ -217,6 +217,7 @@ def _parse_feed(xml_bytes: bytes) -> List[Paper]:
                 "authors": authors,
                 "affiliations": affiliations,
                 "categories": categories,
+                "comments": _clean(entry.findtext(f"{{{ARXIV_NS}}}comment") or ""),
                 "published": (entry.findtext(f"{{{ATOM}}}published") or "").strip(),
                 "updated": (entry.findtext(f"{{{ATOM}}}updated") or "").strip(),
             }

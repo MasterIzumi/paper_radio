@@ -90,6 +90,9 @@ class Paper:
     authors: List[str] = field(default_factory=list)
     affiliations: List[str] = field(default_factory=list)
     categories: List[str] = field(default_factory=list)
+    # arXiv 元信息 comments 字段（例："Accepted by CVPR 2024. 8 pages."），
+    # 用于顶会录用识别；缺失或未抓到时为空串。
+    comments: str = ""
     abs_url: str = ""
     pdf_url: str = ""
     # 论文的真实提交日期（arXiv API 字段）
@@ -144,6 +147,7 @@ class Paper:
             authors=_coerce_str_list(entry.get("authors")),
             affiliations=_coerce_str_list(entry.get("affiliations")),
             categories=_coerce_str_list(entry.get("categories")),
+            comments=str(entry.get("comments", "")).strip(),
             abs_url=str(entry.get("abs_url", "")) or f"https://arxiv.org/abs/{arxiv_id}",
             pdf_url=str(entry.get("pdf_url", "")) or f"https://arxiv.org/pdf/{arxiv_id}",
             published=_parse_atom_datetime(entry.get("published")),
@@ -195,6 +199,7 @@ class Paper:
             "authors": list(self.authors),
             "affiliations": list(self.affiliations),
             "categories": list(self.categories),
+            "comments": self.comments,
             "abs_url": self.abs_url,
             "pdf_url": self.pdf_url,
             "published": self.published.strftime(_ATOM_DATETIME_FMT) if self.published else "",
@@ -227,6 +232,14 @@ class RankedPaper(Paper):
     # 供下游诊断用，LLM 推断过的 PDF 首页文本
     pdf_first_page_context: str = ""
 
+    # 加分/扣分叠加阶段（score_adjust.py 填写，在 stage2 之后执行）
+    # total_score 的最终值 = clamp(relevance + novelty + author_bonus + venue_bonus - penalty, 0, TOTAL_SCORE_MAX)
+    author_bonus: int = 0
+    venue_bonus: int = 0
+    penalty: int = 0
+    # 人类可读的加分/扣分原因，用于日报卡片展示。每项形如 "Hongyang Li@HKU +3"、"CVPR 2024 +4"
+    bonus_reasons: List[str] = field(default_factory=list)
+
     @classmethod
     def from_paper(cls, paper: Paper, **overrides: Any) -> "RankedPaper":
         """用一个 Paper 构造 RankedPaper，可传 LLM 字段覆盖。"""
@@ -258,6 +271,35 @@ class RankedPaper(Paper):
             topic_category=(topic_category if topic_category else self.topic_category) or "未分类",
             one_line_summary=one_line_summary if one_line_summary is not None else self.one_line_summary,
             rank=_coerce_int(rank, self.rank),
+        )
+
+    def with_adjustments(
+        self,
+        *,
+        author_bonus: int = 0,
+        venue_bonus: int = 0,
+        penalty: int = 0,
+        bonus_reasons: Optional[List[str]] = None,
+        total_score_cap: Optional[int] = None,
+    ) -> "RankedPaper":
+        """套用 bonus/penalty 并重算 total_score。
+
+        total_score = clamp(relevance + novelty + author_bonus + venue_bonus - penalty,
+                            0, total_score_cap or +∞)
+        注意 rank 不在这里重排，由调用方在整批算完 total_score 后统一重排。
+        """
+        new_total = self.relevance_score + self.novelty_score + author_bonus + venue_bonus - penalty
+        if new_total < 0:
+            new_total = 0
+        if total_score_cap is not None and new_total > total_score_cap:
+            new_total = total_score_cap
+        return replace(
+            self,
+            author_bonus=max(0, int(author_bonus)),
+            venue_bonus=max(0, int(venue_bonus)),
+            penalty=max(0, int(penalty)),
+            bonus_reasons=list(bonus_reasons or []),
+            total_score=new_total,
         )
 
     def with_institutions(
