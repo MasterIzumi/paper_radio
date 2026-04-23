@@ -710,6 +710,36 @@ main.py
 - `models.Paper.merge_non_empty` 的单测（合并语义）
 - `_normalize_ranked_papers` 的单测（兜底逻辑）
 
+### 15.5 前端展示（每日重点论文）
+
+目前消费产物的方式还是原始的 Markdown 文件（`reports/daily_report_*.md` / `reports/selected_papers/*.md`），
+手动打开阅读。希望做一个小前端，把爬取、筛选、打分、深度分析的结果可视化。
+
+可能的形态：
+
+- 每日首页卡片流：按日期展示"重点论文"，卡片含标题 / 作者 / 机构 / 相关性 / 新颖性 / 加分原因 / 精读摘要
+- 历史归档页：按分数 / 机构 / 关键词筛选跨日期的论文
+- 单篇详情页：展示 LLM 精读全文 + 指向 arXiv / PDF 的跳转
+
+数据源可以直接复用 `reports/` 下的 Markdown（静态站点生成），或者沉淀一份结构化 JSON（`RankedPaper.to_dict` 已经具备基础）。
+最轻量的路线是 "ranker/reporter 产出 JSON → 静态前端（Next.js / Astro / 甚至纯 HTML）渲染"，无需后端服务。
+
+### 15.6 外网访问 + 每日定时运行
+
+希望脚本不再依赖本地开机，能定时跑、且前端可以在外网访问。
+
+关键考量：
+
+- **定时调度**：GitHub Actions 的 `schedule`（cron）完全能胜任，`main.py` 本来就是一次性脚本，跑完写文件即可。
+- **结果托管**：Action 里把 `reports/` 产物 commit 回仓库（或推到一个 `reports` 分支），GitHub Pages 直接托管前端。
+  这样"每日一跑 → 自动发版"形成闭环，无需独立服务器。
+- **API key 保护**：**绝对不要**把 key 写进仓库或 `.env` 提交。应通过 GitHub Actions Secrets 注入
+  （`secrets.LLM_API_KEY` 等），workflow 里 `env:` 段写成 `${{ secrets.* }}`。`.env` 保持在 `.gitignore` 里。
+  如果担心 Action 日志误泄露，可以在脚本里裁掉 LLM 请求日志里可能带 key 的字段。
+- **成本与频率**：默认 Action runner 跑一次就退出，不存在长驻进程，token 成本只和 LLM 调用挂钩。
+- **备选**：如果后续想带后端（搜索 / 筛选交互），再考虑上 Vercel / Cloudflare Pages + Functions，
+  把 LLM 调用 proxy 到服务端，前端拿不到 key。
+
 ---
 
 ## 16. 一句话总结
