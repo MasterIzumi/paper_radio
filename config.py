@@ -19,9 +19,17 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "60"))
 REQUEST_RETRIES = int(os.getenv("REQUEST_RETRIES", "3"))
 REQUEST_RETRY_BASE_SLEEP = int(os.getenv("REQUEST_RETRY_BASE_SLEEP", "5"))
 
-MAX_PAPERS_TO_RANK = 200  # 送给 LLM 的上限（两阶段筛选）
+# ── 两阶段筛选参数 ────────────────────────────────────────────────────────────
+# MAX_PAPERS_TO_RANK：stage1 标题粗筛发给 LLM 的最大论文数（LLM 输入上限）。
+# STAGE1_KEEP：stage1 粗筛后希望保留进入摘要精排的目标数量，也是 LLM 失败时的兜底 top-K。
+MAX_PAPERS_TO_RANK = int(os.getenv("MAX_PAPERS_TO_RANK", "200"))
+STAGE1_KEEP = int(os.getenv("STAGE1_KEEP", "30"))
 
-# ── 规则预筛黑名单 ────────────────────────────────────────────────────────────
+# ── 规则预筛 ──────────────────────────────────────────────────────────────────
+# 三步流程（顺序与 ``ranker._rule_prefilter`` 对应）：
+#   1) BLACKLIST_SUBJECTS 硬剔除  →  2) PREFILTER_KEYWORDS 白名单命中保留
+#   →  3) BLACKLIST_KEYWORDS 硬剔除
+
 # subject 黑名单：论文任一 arXiv subject 命中即直接剔除，不消耗后续 LLM。
 # subject 比对 case-insensitive，但写法建议保留官方大小写。
 BLACKLIST_SUBJECTS = [
@@ -30,6 +38,22 @@ BLACKLIST_SUBJECTS = [
     "cs.SE",    # Software Engineering
     "cs.HC",    # Human-Computer Interaction
     "cs.OS",    # Operating Systems
+    "cs.DB",    # Databases
+    "cs.NE",    # Neural and Evolutionary Computing
+    "cs.CL",    # Computation and Language
+    "cs.ET",    # Emerging Technologies
+]
+
+# 关键词白名单：对 title + abstract + categories 拼接后小写匹配（substring）。
+# 命中任一即保留，否则剔除。全量未命中时会 fallback 取前 STAGE1_KEEP*2 篇兜底。
+PREFILTER_KEYWORDS = [
+    "autonomous driving", "driving", "driverless", "end-to-end", "e2e",
+    "world model", "world models", "video prediction", "occupancy",
+    "bev", "4d", "spatial", "3d", "gaussian", "reconstruction",
+    "depth estimation", "slam", "localization", "navigation",
+    "robot", "robotics", "manipulation", "locomotion",
+    "vision-language-action", "vla", "foundation model",
+    "multimodal foundation model", "scene understanding", "embodied ai",
 ]
 
 # 关键词黑名单：扫描 title + abstract，任一关键词命中即剔除。
@@ -45,6 +69,12 @@ BLACKLIST_KEYWORDS = [
     "UAV",
     "Quadrotor",
     "Underwater",
+    "MAV",
+    "Bio-Inspired",
+    "Bio-Inspiration",
+    "Tactile",
+    "Tactile Sensing",
+    "Peg-in-Hole",
 ]
 
 # ── 排名偏好 ──────────────────────────────────────────────────────────────────

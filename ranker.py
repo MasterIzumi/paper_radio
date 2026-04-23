@@ -12,7 +12,9 @@ from config import (
     BLACKLIST_SUBJECTS,
     INSTITUTION_INFERENCE_CONCURRENCY,
     MAX_PAPERS_TO_RANK,
+    PREFILTER_KEYWORDS,
     RAW_SCORE_MAX,
+    STAGE1_KEEP,
     TOPICS_OF_INTEREST,
 )
 from formatting import fmt_affiliations, fmt_authors
@@ -21,18 +23,6 @@ from models import Paper, RankedPaper
 from pdf_context import fetch_pdf_first_page_context
 
 logger = logging.getLogger(__name__)
-
-# 第一阶段：仅凭标题快速过滤，保留候选数量
-STAGE1_KEEP = 30
-PREFILTER_KEYWORDS = [
-    "autonomous driving", "driving", "driverless", "end-to-end", "e2e",
-    "world model", "world models", "video prediction", "occupancy",
-    "bev", "4d", "spatial", "3d", "gaussian", "reconstruction",
-    "depth estimation", "slam", "localization", "navigation",
-    "robot", "robotics", "manipulation", "grasp", "humanoid", "locomotion",
-    "vision-language-action", "vla", "policy", "planning",
-    "multimodal", "scene understanding",
-]
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
