@@ -5,6 +5,7 @@ paper_radio — 每日 arXiv 论文摘要工具
 """
 import argparse
 import sys
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -25,9 +26,21 @@ from ranker import (
     run_stage1_filter,
     run_stage2_rank,
 )
-from reporter import generate_report
+from reporter import generate_report_bundle
 from score_adjust import apply_score_adjustments
+from serializers import (
+    build_selected_json_payload,
+    refresh_reports_index,
+    write_json,
+)
 from selected_report import save_selected_report
+
+
+def _group_papers_by_announced_day(papers):
+    grouped = defaultdict(list)
+    for paper in papers:
+        grouped[paper.announced_day or "unknown"].append(paper)
+    return sorted(grouped.items(), key=lambda item: item[0], reverse=True)
 
 
 def main():
@@ -96,53 +109,114 @@ def main():
     )
     print(f"     抓取快照已保存：{crawl_snapshot_path}")
 
-    # Step 2: 标题粗筛 → 机构推理 → 摘要精排
-    print("\n[2/3] 正在筛选候选并生成评分...")
-    candidates = run_stage1_filter(papers)
-    if not candidates:
-        print("     标题粗筛后无候选论文，停止。")
-        sys.exit(0)
-    print(f"     标题粗筛后进入 selected 集：{len(candidates)} 篇")
+    grouped_days = _group_papers_by_announced_day(papers)
 
-    print(f"     为 {len(candidates)} 篇 selected 论文并行补充机构信息...")
-    enriched = enrich_papers_with_institutions(candidates)
+    if args.output and len(grouped_days) != 1:
+        print("⚠️  检测到多天 announced 结果，忽略自定义 --output，改为按日期分别落盘。")
 
-    print("     对 selected 论文进行摘要精排...")
-    ranked = run_stage2_rank(enriched)
-    print(f"     精排完成，共 {len(ranked)} 篇论文拿到分数")
+    print(f"\n[2/3] 正在按 announced_date 分天筛选、评分与补充机构信息...")
+    generated_reports = []
+    generated_selected = []
 
-    print("     叠加 featured author / 顶会录用加分...")
-    ranked = apply_score_adjustments(ranked)
+    for day, day_papers in grouped_days:
+        print(f"\n  - 处理 {day}：{len(day_papers)} 篇论文")
+        candidates = run_stage1_filter(day_papers)
+        print(f"    标题粗筛后进入 selected 集：{len(candidates)} 篇")
 
-    selected_snapshot_path = save_selected_report(
-        output_dir=config.SELECTED_OUTPUT_DIR,
-        now=datetime.now(),
-        ranked_papers=ranked,
-    )
-    print(f"     入选快照已保存：{selected_snapshot_path}")
+        if candidates:
+            print(f"    为 {len(candidates)} 篇 selected 论文并行补充机构信息...")
+            enriched = enrich_papers_with_institutions(candidates)
 
-    # Step 3: 生成日报
-    print("\n[3/3] 正在生成日报...")
-    report = generate_report(ranked)
+            print("    对 selected 论文进行摘要精排...")
+            ranked = run_stage2_rank(enriched)
+            print(f"    精排完成，共 {len(ranked)} 篇论文拿到分数")
 
-    # 保存
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        output_path = config.OUTPUT_DIR / f"daily_report_{date_str}.md"
+            print("    叠加 featured author / 顶会录用加分...")
+            ranked = apply_score_adjustments(ranked)
+        else:
+            ranked = []
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(report, encoding="utf-8")
+        export_now = datetime.now()
+        selected_snapshot_path = save_selected_report(
+            output_dir=config.SELECTED_OUTPUT_DIR,
+            now=export_now,
+            ranked_papers=ranked,
+            report_date=day,
+        )
+        generated_selected.append(selected_snapshot_path)
+        print(f"    入选快照已保存：{selected_snapshot_path}")
+
+        report, daily_payload = generate_report_bundle(
+            ranked,
+            categories=categories,
+            report_date=day,
+        )
+
+        if args.output and len(grouped_days) == 1:
+            output_path = Path(args.output)
+        else:
+            config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            output_path = config.OUTPUT_DIR / f"daily_report_{day}.md"
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(report, encoding="utf-8")
+        generated_reports.append((day, output_path, report))
+
+        try:
+            selected_payload = build_selected_json_payload(
+                now=export_now,
+                ranked_papers=ranked,
+                categories=categories,
+                report_date=day,
+            )
+            selected_json_path = write_json(
+                config.SELECTED_JSON_OUTPUT_DIR / f"selected_papers_{day}.json",
+                selected_payload,
+            )
+            write_json(
+                config.WEBAPP_SELECTED_JSON_OUTPUT_DIR / f"selected_papers_{day}.json",
+                selected_payload,
+            )
+            daily_json_path = write_json(
+                config.DAILY_JSON_OUTPUT_DIR / f"daily_report_{day}.json",
+                daily_payload,
+            )
+            write_json(
+                config.WEBAPP_DAILY_JSON_OUTPUT_DIR / f"daily_report_{day}.json",
+                daily_payload,
+            )
+            print(f"    前端数据已更新：{selected_json_path}")
+            print(f"    前端数据已更新：{daily_json_path}")
+        except Exception as exc:
+            print(f"⚠️  {day} 的前端 JSON 导出失败，Markdown 已保留：{exc}")
+
+    print("\n[3/3] 正在刷新前端索引...")
+    try:
+        index_json_path = refresh_reports_index(
+            index_path=config.REPORTS_JSON_DIR / "index.json",
+            daily_dir=config.DAILY_JSON_OUTPUT_DIR,
+            selected_dir=config.SELECTED_JSON_OUTPUT_DIR,
+            categories=categories,
+        )
+        refresh_reports_index(
+            index_path=config.WEBAPP_REPORTS_JSON_DIR / "index.json",
+            daily_dir=config.WEBAPP_DAILY_JSON_OUTPUT_DIR,
+            selected_dir=config.WEBAPP_SELECTED_JSON_OUTPUT_DIR,
+            categories=categories,
+        )
+        print(f"     前端索引已更新：{index_json_path}")
+    except Exception as exc:
+        print(f"⚠️  前端索引刷新失败：{exc}")
 
     print("\n" + "=" * 60)
-    print(f"✅ 报告已保存至：{output_path}")
+    print("✅ 已按 announced_date 生成以下日报：")
+    for day, output_path, _ in generated_reports:
+        print(f"   - {day}: {output_path}")
     print("=" * 60)
 
-    # 打印报告前几行预览
-    preview = "\n".join(report.splitlines()[:20])
-    print(f"\n{'─'*60}\n{preview}\n{'─'*60}")
+    if generated_reports:
+        preview = "\n".join(generated_reports[0][2].splitlines()[:20])
+        print(f"\n{'─'*60}\n{preview}\n{'─'*60}")
 
 
 if __name__ == "__main__":

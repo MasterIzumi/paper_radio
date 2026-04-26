@@ -131,7 +131,8 @@ def build_paper_table_rows(papers: List[Paper]) -> List[List[str]]:
                 clip(fmt_authors(paper.authors), 38),
                 clip(fmt_subjects(paper.categories), 42),
                 paper.primary_url,
-                paper.published_day or "N/A",
+                paper.announced_day or "N/A",
+                paper.published_day or "-",
             ]
         )
     return rows
@@ -192,7 +193,7 @@ def save_recent_crawl_report(
     daily_table = render_table(daily_rows, headers=daily_headers)
     paper_table = render_table(
         build_paper_table_rows(papers),
-        headers=["#", "arXiv ID", "Title", "Authors", "Subjects", "URL", "Published"],
+        headers=["#", "arXiv ID", "Title", "Authors", "Subjects", "URL", "Announced", "Published"],
     )
     content = build_recent_crawl_markdown(
         now=now,

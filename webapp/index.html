@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Paper Radio Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <div id="protocol-warning" class="banner hidden">
+        浏览器通常会阻止 `file://` 页面直接 `fetch` 本地 JSON。建议在仓库根目录运行一个简单静态服务，再打开
+        `webapp/index.html`。
+      </div>
+      <div id="error-banner" class="banner error hidden"></div>
+
+      <div class="app-layout">
+        <aside class="sidebar panel">
+          <div class="sidebar-head">
+            <p class="eyebrow">Paper Radio Dashboard</p>
+            <h2>日期导航</h2>
+            <p class="sidebar-note">按月份和周展开，快速回看每天 announced 的论文结果。</p>
+          </div>
+          <div id="date-sidebar" class="date-sidebar"></div>
+        </aside>
+
+        <div class="content-shell">
+          <header class="hero">
+            <div class="hero-copy">
+              <p class="eyebrow">Paper Radio Dashboard</p>
+              <h1>每日论文挖掘看板</h1>
+              <p class="hero-text">
+                用一个静态页面同时查看最终日报和 selected 候选池，适合快速扫当日亮点，也方便回看筛选链路。
+              </p>
+            </div>
+            <div class="hero-controls">
+              <div class="meta-panel">
+                <div><span class="meta-label">当前日期</span><strong id="meta-date">-</strong></div>
+                <div><span class="meta-label">数据更新时间</span><strong id="meta-generated-at">-</strong></div>
+                <div><span class="meta-label">分区</span><strong id="meta-categories">-</strong></div>
+                <div><span class="meta-label">模型</span><strong id="meta-models">-</strong></div>
+              </div>
+            </div>
+          </header>
+
+          <nav class="tabs" aria-label="结果层次切换">
+            <button class="tab-button active" data-tab="daily">Daily</button>
+            <button class="tab-button" data-tab="selected">Selected</button>
+          </nav>
+
+          <main>
+        <section id="daily-tab" class="tab-panel active">
+          <div class="summary-grid" id="daily-summary-cards"></div>
+
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Daily</p>
+                <h2>重点论文速览</h2>
+              </div>
+              <p class="section-note" id="daily-threshold-note"></p>
+            </div>
+            <div id="daily-top-grid" class="paper-grid"></div>
+          </section>
+
+          <section class="panel detail-panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Detail</p>
+                <h2>重点论文详情</h2>
+              </div>
+            </div>
+            <div id="daily-detail" class="detail-empty">点击上方论文卡片查看完整信息。</div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Deep Analysis</p>
+                <h2>深度简报</h2>
+              </div>
+            </div>
+            <div id="deep-analysis-list" class="analysis-stack"></div>
+          </section>
+        </section>
+
+        <section id="selected-tab" class="tab-panel">
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Selected</p>
+                <h2>方向汇总</h2>
+              </div>
+            </div>
+            <div id="topic-summary" class="topic-summary"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Explorer</p>
+                <h2>Selected 全量列表</h2>
+              </div>
+              <p class="section-note">支持排序、方向筛选、标题/一句话总结搜索</p>
+            </div>
+
+            <div class="controls-row">
+              <label class="field compact">
+                <span>排序</span>
+                <select id="selected-sort">
+                  <option value="total">总分</option>
+                  <option value="relevance">相关性</option>
+                  <option value="novelty">新颖性</option>
+                </select>
+              </label>
+              <label class="field compact">
+                <span>方向</span>
+                <select id="selected-topic-filter">
+                  <option value="">全部</option>
+                </select>
+              </label>
+              <label class="field search">
+                <span>关键词</span>
+                <input id="selected-search" type="search" placeholder="搜索标题或一句话总结" />
+              </label>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>arXiv</th>
+                    <th>Title</th>
+                    <th>方向</th>
+                    <th>总分</th>
+                    <th>相关性</th>
+                    <th>新颖性</th>
+                    <th>一句话总结</th>
+                  </tr>
+                </thead>
+                <tbody id="selected-table-body"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel detail-panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Paper Detail</p>
+                <h2>Selected 详情</h2>
+              </div>
+            </div>
+            <div id="selected-detail" class="detail-empty">点击表格中的论文查看机构、加分与完整摘要信息。</div>
+          </section>
+        </section>
+          </main>
+        </div>
+      </div>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

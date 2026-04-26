@@ -9,6 +9,7 @@ import prompts
 from config import (
     DEEP_ANALYSIS_MAX_PAPERS,
     DEEP_ANALYSIS_MIN_TOTAL_SCORE,
+    FETCH_CATEGORIES,
     LLM_PROVIDER,
     TOP_DISPLAY_MIN_COUNT,
     TOP_DISPLAY_MIN_SCORE,
@@ -18,6 +19,7 @@ from formatting import escape_md_cell, fmt_affiliations, fmt_authors
 from fulltext import fetch_sections
 from llm import chat, get_active_model
 from models import RankedPaper
+from serializers import build_daily_json_payload
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +82,36 @@ def _deep_analysis(paper: RankedPaper) -> str:
     ).strip()
 
 
-def generate_report(ranked_papers: List[RankedPaper]) -> str:
+def generate_report(
+    ranked_papers: List[RankedPaper],
+    *,
+    categories: List[str] | None = None,
+    report_date: str | None = None,
+) -> str:
     """生成完整的每日 Markdown 报告。"""
-    today_str = datetime.now().strftime("%Y年%m月%d日")
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    markdown, _ = generate_report_bundle(
+        ranked_papers,
+        categories=list(categories or FETCH_CATEGORIES),
+        report_date=report_date,
+    )
+    return markdown
+
+
+def generate_report_bundle(
+    ranked_papers: List[RankedPaper],
+    *,
+    categories: List[str],
+    report_date: str | None = None,
+) -> tuple[str, dict]:
+    """一次生成 Markdown 报告和前端 JSON 载荷，避免重复精读。"""
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+    report_day = report_date or now.strftime("%Y-%m-%d")
+    try:
+        report_dt = datetime.strptime(report_day, "%Y-%m-%d")
+    except ValueError:
+        report_dt = now
+    today_str = report_dt.strftime("%Y年%m月%d日")
     lines: List[str] = []
 
     fast_model = get_active_model("fast")
@@ -102,7 +130,20 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
 
     if not ranked_papers:
         lines.append("今日暂无符合条件的论文，请明日再试。\n")
-        return "\n".join(lines)
+        return "\n".join(lines), build_daily_json_payload(
+            now=now,
+            categories=categories,
+            fast_model=fast_model,
+            strong_model=strong_model,
+            ranked_papers=[],
+            top_display_papers=[],
+            deep_analysis_entries=[],
+            top_display_min_score=TOP_DISPLAY_MIN_SCORE,
+            top_display_min_count=TOP_DISPLAY_MIN_COUNT,
+            deep_analysis_max_papers=DEEP_ANALYSIS_MAX_PAPERS,
+            deep_analysis_min_total_score=DEEP_ANALYSIS_MIN_TOTAL_SCORE,
+            report_date=report_day,
+        )
 
     top_display = _select_top_display_papers(ranked_papers)
     n = len(top_display)
@@ -150,7 +191,11 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
             f"- **arXiv**: [{paper.arxiv_id}]({paper.primary_url})",
             f"- **作者**: {fmt_authors(paper.authors)}",
             f"- **机构**: {fmt_affiliations(paper)}",
-            f"- **方向**: {paper.topic_category or '—'} | **提交**: {paper.published_day or 'N/A'}",
+            (
+                f"- **方向**: {paper.topic_category or '—'} | "
+                f"**公布**: {paper.announced_day or 'N/A'}"
+                + (f" | **提交**: {paper.published_day}" if paper.published_day else "")
+            ),
             f"- **评分**: {' · '.join(score_bits)}",
         ]
         if paper.bonus_reasons:
@@ -163,6 +208,7 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
     lines += ["---", ""]
 
     deep_analysis_papers = _select_deep_analysis_papers(ranked_papers)
+    deep_analysis_entries = []
 
     # ── 深度简报 ──────────────────────────────────────────────────────────────
     lines += [
@@ -185,6 +231,7 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
 
         logger.info("生成第 %d 篇深度分析：%s", i, title[:60])
         analysis = _deep_analysis(paper)
+        deep_analysis_entries.append({"paper": paper, "analysis": analysis})
 
         lines += [
             f"### 🥇 #{i} | [{title}]({url})",
@@ -194,7 +241,12 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
             f"| **arXiv** | [{paper.arxiv_id}]({url}) |",
             f"| **作者** | {fmt_authors(paper.authors)} |",
             f"| **方向** | {paper.topic_category or '—'} |",
-            f"| **提交** | {paper.published_day or 'N/A'} |",
+            f"| **公布** | {paper.announced_day or 'N/A'} |",
+            (
+                f"| **提交** | {paper.published_day} |"
+                if paper.published_day
+                else ""
+            ),
             "",
             analysis,
             "",
@@ -203,4 +255,17 @@ def generate_report(ranked_papers: List[RankedPaper]) -> str:
         ]
 
     lines += [f"*本报告由 `{strong_model}` 自动生成 · {now_str}*"]
-    return "\n".join(lines)
+    return "\n".join(lines), build_daily_json_payload(
+        now=now,
+        categories=categories,
+        fast_model=fast_model,
+        strong_model=strong_model,
+        ranked_papers=ranked_papers,
+        top_display_papers=top_display,
+        deep_analysis_entries=deep_analysis_entries,
+        top_display_min_score=TOP_DISPLAY_MIN_SCORE,
+        top_display_min_count=TOP_DISPLAY_MIN_COUNT,
+        deep_analysis_max_papers=DEEP_ANALYSIS_MAX_PAPERS,
+        deep_analysis_min_total_score=DEEP_ANALYSIS_MIN_TOTAL_SCORE,
+        report_date=report_day,
+    )

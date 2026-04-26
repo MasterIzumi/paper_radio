@@ -326,6 +326,30 @@ class RankedPaper(Paper):
             ),
         )
 
+    def to_dict(self) -> Dict[str, Any]:
+        base = super().to_dict()
+        base.update(
+            {
+                "relevance_score": self.relevance_score,
+                "novelty_score": self.novelty_score,
+                "total_score": self.total_score,
+                "topic_category": self.topic_category,
+                "one_line_summary": self.one_line_summary,
+                "rank": self.rank,
+                "raw_affiliations": list(self.raw_affiliations),
+                "normalized_institutions": list(self.normalized_institutions),
+                "institution_types": self.institution_types,
+                "institution_summary": self.institution_summary,
+                "institution_evidence_source": self.institution_evidence_source,
+                "pdf_first_page_context": self.pdf_first_page_context,
+                "author_bonus": self.author_bonus,
+                "venue_bonus": self.venue_bonus,
+                "penalty": self.penalty,
+                "bonus_reasons": list(self.bonus_reasons),
+            }
+        )
+        return base
+
 
 __all__ = [
     "Paper",
