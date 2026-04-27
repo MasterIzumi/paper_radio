@@ -416,6 +416,16 @@ main {
   background: rgba(255, 252, 246, 0.92);
 }
 
+.topic-chip strong {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.topic-chip span {
+  color: var(--muted);
+  font-weight: 600;
+}
+
 .detail-panel {
   min-height: 220px;
 }
