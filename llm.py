@@ -23,7 +23,7 @@ PROVIDERS = {
     "anthropic": (None,                                     "claude-haiku-4-5",     "claude-opus-4-6"),
     "kimi":      ("https://api.moonshot.cn/v1",             "moonshot-v1-32k",      "kimi-k2.6"),
     "zhipu":     ("https://open.bigmodel.cn/api/paas/v4/",  "glm-4-flash",          "glm-4-plus"),
-    "deepseek":  ("https://api.deepseek.com/v1",            "deepseek-chat",        "deepseek-reasoner"),
+    "deepseek":  ("https://api.deepseek.com/v1",            "deepseek-v4-flash",    "deepseek-v4-pro"),
     # 兼容任意 OpenAI endpoint：在 config 里设 LLM_PROVIDER="custom"
     # 并设 LLM_BASE_URL + FAST_MODEL / STRONG_MODEL
     "custom":    (os.getenv("LLM_BASE_URL", ""),            os.getenv("FAST_MODEL", "gpt-4o-mini"),
