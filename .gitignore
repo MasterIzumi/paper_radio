@@ -2,5 +2,4 @@
 .cursor
 reports/*
 reports_json/*
-webapp/reports_json/*
 .DS_Store

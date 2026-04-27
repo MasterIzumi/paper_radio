@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Paper Radio Dashboard</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260428-1" />
   </head>
   <body>
     <div class="page-shell">
@@ -16,12 +16,7 @@
 
       <div class="app-layout">
         <aside class="sidebar panel">
-          <div class="sidebar-head">
-            <p class="eyebrow">Paper Radio Dashboard</p>
-            <h2>日期导航</h2>
-            <p class="sidebar-note">按月份和周展开，快速回看每天 announced 的论文结果。</p>
-          </div>
-          <div id="date-sidebar" class="date-sidebar"></div>
+          <div id="date-rail" class="date-rail"></div>
         </aside>
 
         <div class="content-shell">
@@ -30,22 +25,22 @@
               <p class="eyebrow">Paper Radio Dashboard</p>
               <h1>每日论文挖掘看板</h1>
               <p class="hero-text">
-                用一个静态页面同时查看最终日报和 selected 候选池，适合快速扫当日亮点，也方便回看筛选链路。
+                用一个静态页面同时查看 Highlight 和 Longlist，适合快速扫当日亮点，也方便回看筛选链路。
               </p>
             </div>
             <div class="hero-controls">
               <div class="meta-panel">
-                <div><span class="meta-label">当前日期</span><strong id="meta-date">-</strong></div>
+                <div><span class="meta-label">公布日期</span><strong id="meta-date">-</strong></div>
                 <div><span class="meta-label">数据更新时间</span><strong id="meta-generated-at">-</strong></div>
                 <div><span class="meta-label">分区</span><strong id="meta-categories">-</strong></div>
-                <div><span class="meta-label">模型</span><strong id="meta-models">-</strong></div>
+                <div><span class="meta-label">分析模型</span><strong id="meta-models">-</strong></div>
               </div>
             </div>
           </header>
 
           <nav class="tabs" aria-label="结果层次切换">
-            <button class="tab-button active" data-tab="daily">Daily</button>
-            <button class="tab-button" data-tab="selected">Selected</button>
+            <button class="tab-button active" data-tab="daily">Highlight</button>
+            <button class="tab-button" data-tab="selected">Longlist</button>
           </nav>
 
           <main>
@@ -55,7 +50,7 @@
           <section class="panel">
             <div class="section-head">
               <div>
-                <p class="eyebrow">Daily</p>
+                <p class="eyebrow">Highlight</p>
                 <h2>重点论文速览</h2>
               </div>
               <p class="section-note" id="daily-threshold-note"></p>
@@ -88,7 +83,7 @@
           <section class="panel">
             <div class="section-head">
               <div>
-                <p class="eyebrow">Selected</p>
+                <p class="eyebrow">Longlist</p>
                 <h2>方向汇总</h2>
               </div>
             </div>
@@ -99,7 +94,7 @@
             <div class="section-head">
               <div>
                 <p class="eyebrow">Explorer</p>
-                <h2>Selected 全量列表</h2>
+                <h2>Longlist 全量列表</h2>
               </div>
               <p class="section-note">支持排序、方向筛选、标题/一句话总结搜索</p>
             </div>
@@ -132,6 +127,7 @@
                     <th>#</th>
                     <th>arXiv</th>
                     <th>Title</th>
+                    <th>机构</th>
                     <th>方向</th>
                     <th>总分</th>
                     <th>相关性</th>
@@ -143,22 +139,12 @@
               </table>
             </div>
           </section>
-
-          <section class="panel detail-panel">
-            <div class="section-head">
-              <div>
-                <p class="eyebrow">Paper Detail</p>
-                <h2>Selected 详情</h2>
-              </div>
-            </div>
-            <div id="selected-detail" class="detail-empty">点击表格中的论文查看机构、加分与完整摘要信息。</div>
-          </section>
         </section>
           </main>
         </div>
       </div>
     </div>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260428-1"></script>
   </body>
 </html>

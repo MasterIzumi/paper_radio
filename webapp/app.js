@@ -1,7 +1,4 @@
-const DATA_INDEX_URL_CANDIDATES = [
-  "./reports_json/index.json",
-  "../reports_json/index.json",
-];
+const DATA_INDEX_URL = "../reports_json/index.json";
 
 const state = {
   index: null,
@@ -13,11 +10,10 @@ const state = {
   selectedTopic: "",
   selectedSearch: "",
   activeDailyId: "",
-  activeSelectedId: "",
 };
 
 const el = {
-  dateSidebar: document.getElementById("date-sidebar"),
+  dateRail: document.getElementById("date-rail"),
   metaDate: document.getElementById("meta-date"),
   metaGeneratedAt: document.getElementById("meta-generated-at"),
   metaCategories: document.getElementById("meta-categories"),
@@ -34,7 +30,6 @@ const el = {
   selectedTopicFilter: document.getElementById("selected-topic-filter"),
   selectedSearch: document.getElementById("selected-search"),
   selectedTableBody: document.getElementById("selected-table-body"),
-  selectedDetail: document.getElementById("selected-detail"),
   tabButtons: [...document.querySelectorAll(".tab-button")],
   tabPanels: [...document.querySelectorAll(".tab-panel")],
 };
@@ -55,6 +50,11 @@ function prettyTime(value) {
 function formatDateLabel(date) {
   const [year, month, day] = date.split("-");
   return `${month}/${day}`;
+}
+
+function formatWeekdayShort(dateString) {
+  const date = new Date(`${dateString}T00:00:00`);
+  return date.toLocaleDateString("en-US", { weekday: "short" });
 }
 
 function formatMonthLabel(monthKey) {
@@ -93,6 +93,15 @@ function joinOrDash(values) {
   return values.join("; ");
 }
 
+function institutionDisplay(paper) {
+  return (
+    paper.affiliations_display ||
+    paper.institution_summary ||
+    joinOrDash(paper.normalized_institutions) ||
+    "—"
+  );
+}
+
 function showError(message) {
   el.errorBanner.textContent = message;
   el.errorBanner.classList.remove("hidden");
@@ -109,18 +118,6 @@ async function fetchJson(url) {
     throw new Error(`请求失败：${response.status} ${response.statusText}`);
   }
   return response.json();
-}
-
-async function fetchJsonFromCandidates(urls) {
-  let lastError = null;
-  for (const url of urls) {
-    try {
-      return await fetchJson(url);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError || new Error("未找到可用的数据文件");
 }
 
 function getRequestedDate() {
@@ -163,53 +160,24 @@ function renderMeta() {
 }
 
 function buildSidebarGroups(entries) {
-  const monthMap = new Map();
-  entries.forEach((entry) => {
-    const monthKey = entry.date.slice(0, 7);
-    const weekKey = getWeekKey(entry.date);
-    if (!monthMap.has(monthKey)) monthMap.set(monthKey, new Map());
-    const weekMap = monthMap.get(monthKey);
-    if (!weekMap.has(weekKey)) weekMap.set(weekKey, []);
-    weekMap.get(weekKey).push(entry);
-  });
-  return monthMap;
+  return entries;
 }
 
-function renderDateSidebar() {
-  const entries = state.index?.entries || [];
-  const groups = buildSidebarGroups(entries);
-  el.dateSidebar.innerHTML = [...groups.entries()]
-    .map(([monthKey, weekMap]) => `
-      <section class="month-block">
-        <h3 class="month-title">${escapeHtml(formatMonthLabel(monthKey))}</h3>
-        ${[...weekMap.entries()]
-          .map(([weekKey, items]) => `
-            <section class="week-block">
-              <p class="week-title">Week ${escapeHtml(formatWeekLabel(weekKey))}</p>
-              <div class="date-list">
-                ${items
-                  .map((entry) => `
-                    <button class="date-item ${entry.date === state.currentDate ? "active" : ""}" data-date-value="${escapeHtml(entry.date)}">
-                      <span class="date-label">
-                        <span class="date-main">${escapeHtml(formatDateLabel(entry.date))}</span>
-                        <span class="date-sub">${escapeHtml(entry.date)}</span>
-                      </span>
-                      <span class="date-badge">${entry.date === state.index?.default_date ? "Latest" : "Open"}</span>
-                    </button>
-                  `)
-                  .join("")}
-              </div>
-            </section>
-          `)
-          .join("")}
-      </section>
+function renderDateRail() {
+  const entries = buildSidebarGroups(state.index?.entries || []);
+  el.dateRail.innerHTML = entries
+    .map((entry) => `
+      <button class="rail-date ${entry.date === state.currentDate ? "active" : ""}" data-rail-date="${escapeHtml(entry.date)}">
+        <span class="rail-date-day">${escapeHtml(entry.date.slice(5))}</span>
+        <span class="rail-date-weekday">${escapeHtml(formatWeekdayShort(entry.date))}</span>
+      </button>
     `)
     .join("");
 
-  document.querySelectorAll("[data-date-value]").forEach((node) => {
+  document.querySelectorAll("[data-rail-date]").forEach((node) => {
     node.addEventListener("click", async () => {
       try {
-        await loadDate(node.dataset.dateValue);
+        await loadDate(node.dataset.railDate);
       } catch (error) {
         showError(`切换日期失败：${error.message}`);
       }
@@ -223,7 +191,7 @@ function renderDailySummary() {
 
   const cards = [
     {
-      label: "Selected 论文数",
+      label: "Longlist 论文数",
       value: daily.selected_paper_count,
       note: "通过粗筛并完成精排的候选池规模",
     },
@@ -281,6 +249,9 @@ function renderDailyCards() {
             <span class="score-pill">新颖性 ${escapeHtml(paper.novelty_score)}</span>
           </div>
           <p class="paper-meta">${escapeHtml(paper.authors_display || joinOrDash(paper.authors))}</p>
+          <div class="card-institution">
+            <p class="paper-meta institution-meta">${escapeHtml(institutionDisplay(paper))}</p>
+          </div>
           <p>${escapeHtml(paper.one_line_summary || "暂无一句话总结")}</p>
           <div class="link-row">
             <a class="link-chip" href="${escapeHtml(paper.primary_url)}" target="_blank" rel="noreferrer">arXiv</a>
@@ -313,7 +284,7 @@ function renderDailyDetail() {
 
   el.dailyDetail.innerHTML = `
     <article class="detail-card">
-      <p class="eyebrow">Daily Detail</p>
+      <p class="eyebrow">Highlight Detail</p>
       <h3>${escapeHtml(paper.title)}</h3>
       <p class="subtle">${escapeHtml(paper.authors_display || joinOrDash(paper.authors))}</p>
       <div class="detail-tags">
@@ -440,26 +411,20 @@ function getFilteredSelectedPapers() {
 }
 
 function setActiveSelectedPaper(arxivId) {
-  state.activeSelectedId = arxivId;
-  renderSelectedTable();
-  renderSelectedDetail();
+  return arxivId;
 }
 
 function renderSelectedTable() {
   const papers = getFilteredSelectedPapers();
   if (!papers.length) {
-    el.selectedTableBody.innerHTML = '<tr><td colspan="8">没有匹配当前筛选条件的论文。</td></tr>';
+    el.selectedTableBody.innerHTML = '<tr><td colspan="9">没有匹配当前筛选条件的论文。</td></tr>';
     return;
-  }
-
-  if (!papers.some((paper) => paper.arxiv_id === state.activeSelectedId)) {
-    state.activeSelectedId = papers[0].arxiv_id;
   }
 
   el.selectedTableBody.innerHTML = papers
     .map(
       (paper, index) => `
-        <tr data-selected-id="${escapeHtml(paper.arxiv_id)}" class="${paper.arxiv_id === state.activeSelectedId ? "active" : ""}">
+        <tr>
           <td>${index + 1}</td>
           <td>
             <a class="arxiv-id-link" href="${escapeHtml(paper.primary_url)}" target="_blank" rel="noreferrer" title="打开 arXiv 页面">
@@ -468,6 +433,7 @@ function renderSelectedTable() {
             </a>
           </td>
           <td>${escapeHtml(paper.title)}</td>
+          <td>${escapeHtml(institutionDisplay(paper))}</td>
           <td>${escapeHtml(paper.topic_category || "未分类")}</td>
           <td>${escapeHtml(paper.total_score)}</td>
           <td>${escapeHtml(paper.relevance_score)}</td>
@@ -477,10 +443,6 @@ function renderSelectedTable() {
       `
     )
     .join("");
-
-  document.querySelectorAll("[data-selected-id]").forEach((node) => {
-    node.addEventListener("click", () => setActiveSelectedPaper(node.dataset.selectedId));
-  });
   document.querySelectorAll(".arxiv-id-link").forEach((node) => {
     node.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -488,70 +450,10 @@ function renderSelectedTable() {
   });
 }
 
-function renderSelectedDetail() {
-  const papers = getFilteredSelectedPapers();
-  const paper = papers.find((item) => item.arxiv_id === state.activeSelectedId) || papers[0];
-  if (!paper) {
-    el.selectedDetail.innerHTML = '<div class="detail-empty">暂无 selected 详情。</div>';
-    return;
-  }
-  state.activeSelectedId = paper.arxiv_id;
-
-  const reasons = paper.bonus_reasons?.length ? paper.bonus_reasons : ["无额外加分原因"];
-  el.selectedDetail.innerHTML = `
-    <article class="detail-card">
-      <p class="eyebrow">Selected Detail</p>
-      <h3>${escapeHtml(paper.title)}</h3>
-      <p class="subtle">${escapeHtml(joinOrDash(paper.authors))}</p>
-      <div class="detail-tags">
-        <span class="tag">${escapeHtml(paper.topic_category || "未分类")}</span>
-        <span class="tag">总分 ${escapeHtml(paper.total_score)}</span>
-        <span class="tag">公布 ${escapeHtml(paper.announced_day || "N/A")}</span>
-        <span class="tag">机构 ${escapeHtml(paper.affiliations_display || "—")}</span>
-      </div>
-      <div class="detail-grid">
-        <div class="detail-block">
-          <strong>一句话总结</strong>
-          <span>${escapeHtml(paper.one_line_summary || "暂无")}</span>
-        </div>
-        <div class="detail-block">
-          <strong>机构推断</strong>
-          <span>${escapeHtml(paper.institution_summary || joinOrDash(paper.normalized_institutions) || "暂无")}</span>
-        </div>
-        <div class="detail-block">
-          <strong>时间信息</strong>
-          <span>公布 ${escapeHtml(paper.announced_day || "N/A")}${paper.published_day ? ` · 提交 ${escapeHtml(paper.published_day)}` : ""}</span>
-        </div>
-        <div class="detail-block">
-          <strong>评分拆解</strong>
-          <span>相关性 ${escapeHtml(paper.relevance_score)} · 新颖性 ${escapeHtml(paper.novelty_score)} · 作者加分 ${escapeHtml(paper.author_bonus)} · 顶会加分 ${escapeHtml(paper.venue_bonus)}</span>
-        </div>
-        <div class="detail-block">
-          <strong>证据来源</strong>
-          <span>${escapeHtml(paper.institution_evidence_source || "unknown")}</span>
-        </div>
-      </div>
-      <div class="detail-block" style="margin-top: 16px;">
-        <strong>加分原因</strong>
-        <ul>${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
-      </div>
-      <div class="detail-block" style="margin-top: 16px;">
-        <strong>摘要</strong>
-        <span>${escapeHtml(paper.abstract || "暂无摘要")}</span>
-      </div>
-      <div class="detail-block" style="margin-top: 16px;">
-        <strong>链接</strong>
-        <a href="${escapeHtml(paper.primary_url)}" target="_blank" rel="noreferrer">打开 arXiv 页面</a>
-      </div>
-    </article>
-  `;
-}
-
 function renderSelected() {
   renderTopicSummary();
   populateTopicFilter();
   renderSelectedTable();
-  renderSelectedDetail();
 }
 
 async function loadDate(date) {
@@ -563,16 +465,10 @@ async function loadDate(date) {
 
   const [daily, selected] = await Promise.all([
     entry.daily_path
-      ? fetchJsonFromCandidates([
-          `./reports_json/${entry.daily_path}`,
-          `../reports_json/${entry.daily_path}`,
-        ])
+      ? fetchJson(`../reports_json/${entry.daily_path}`)
       : Promise.resolve(null),
     entry.selected_path
-      ? fetchJsonFromCandidates([
-          `./reports_json/${entry.selected_path}`,
-          `../reports_json/${entry.selected_path}`,
-        ])
+      ? fetchJson(`../reports_json/${entry.selected_path}`)
       : Promise.resolve(null),
   ]);
 
@@ -580,9 +476,8 @@ async function loadDate(date) {
   state.daily = daily;
   state.selected = selected;
   state.activeDailyId = daily?.top_display_papers?.[0]?.arxiv_id || "";
-  state.activeSelectedId = selected?.papers?.[0]?.arxiv_id || "";
 
-  renderDateSidebar();
+  renderDateRail();
   renderMeta();
   renderDailySummary();
   renderDailyCards();
@@ -600,11 +495,11 @@ async function init() {
   }
   clearError();
 
-  state.index = await fetchJsonFromCandidates(DATA_INDEX_URL_CANDIDATES);
+  state.index = await fetchJson(DATA_INDEX_URL);
   const requestedDate = getRequestedDate();
   const availableDates = (state.index.entries || []).map((entry) => entry.date);
   if (!availableDates.length) {
-    showError("当前还没有可展示的前端 JSON 数据。请先运行主流程生成 reports_json/。");
+    showError("当前还没有可展示的前端 JSON 数据。请先运行主流程，在仓库根目录生成 reports_json/。");
     return;
   }
   const defaultDate = availableDates.includes(requestedDate)
@@ -621,22 +516,19 @@ async function init() {
   el.selectedSort.addEventListener("change", (event) => {
     state.selectedSort = event.target.value;
     renderSelectedTable();
-    renderSelectedDetail();
   });
   el.selectedTopicFilter.addEventListener("change", (event) => {
     state.selectedTopic = event.target.value;
     renderSelectedTable();
-    renderSelectedDetail();
   });
   el.selectedSearch.addEventListener("input", (event) => {
     state.selectedSearch = event.target.value;
     renderSelectedTable();
-    renderSelectedDetail();
   });
 
   switchTab(state.currentTab);
   state.currentDate = defaultDate;
-  renderDateSidebar();
+  renderDateRail();
   await loadDate(defaultDate);
 }
 

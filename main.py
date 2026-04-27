@@ -173,16 +173,8 @@ def main():
                 config.SELECTED_JSON_OUTPUT_DIR / f"selected_papers_{day}.json",
                 selected_payload,
             )
-            write_json(
-                config.WEBAPP_SELECTED_JSON_OUTPUT_DIR / f"selected_papers_{day}.json",
-                selected_payload,
-            )
             daily_json_path = write_json(
                 config.DAILY_JSON_OUTPUT_DIR / f"daily_report_{day}.json",
-                daily_payload,
-            )
-            write_json(
-                config.WEBAPP_DAILY_JSON_OUTPUT_DIR / f"daily_report_{day}.json",
                 daily_payload,
             )
             print(f"    前端数据已更新：{selected_json_path}")
@@ -196,12 +188,6 @@ def main():
             index_path=config.REPORTS_JSON_DIR / "index.json",
             daily_dir=config.DAILY_JSON_OUTPUT_DIR,
             selected_dir=config.SELECTED_JSON_OUTPUT_DIR,
-            categories=categories,
-        )
-        refresh_reports_index(
-            index_path=config.WEBAPP_REPORTS_JSON_DIR / "index.json",
-            daily_dir=config.WEBAPP_DAILY_JSON_OUTPUT_DIR,
-            selected_dir=config.WEBAPP_SELECTED_JSON_OUTPUT_DIR,
             categories=categories,
         )
         print(f"     前端索引已更新：{index_json_path}")

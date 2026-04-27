@@ -126,7 +126,7 @@
   - `fetch_recent_papers(enrich_metadata=False)`：测试脚本用的轻量版，不调 API
   - `fetch_paper_by_id()`：按 ID 单篇抓取（测试 / 调试用）
   - `get_recent_coverage()`：探测 recent 页面能覆盖到的最早日期
-- [`pdf_context.py`](pdf_context.py)：下载 PDF 并提取**整页第一页文本**给机构推断用。
+- [`pdf_context.py`](pdf_context.py)：下载 PDF 并提取**标题区 / 机构候选 / 页底候选**这类高价值片段给机构推断用。
 - [`fulltext.py`](fulltext.py)：抓 arXiv HTML 版本的 Introduction / Method 段落，给深度简报用。
 
 ### 4.4 排序与机构推断
@@ -213,11 +213,15 @@
 
 [`pdf_context.py`](pdf_context.py)：
 
-- 用 `pypdf` 抽第一页全文
-- 行级清洗（去多余空白、压缩连续空行），整页保留
+- 用 `pypdf` 抽第一页文本
+- 做行级清洗与噪声过滤（watermark / 页码 / 常见版权语句）
+- 从第一页里提取三类高价值片段：
+  - 标题 / 作者块
+  - 机构 / 邮箱 / 脚注候选
+  - 页底候选文本
 - 字符数封顶 8000，给 LLM 做机构推断用
 
-之前的版本只保留头 40 行 + 尾 20 行，会丢两栏排版里夹在中间的脚注 / affiliation；现在保留整页，靠 LLM 自己挑重要片段，只做体积裁剪。
+相比早期的"整页全文直接输入"，现在的策略更偏向把最可能含机构信息的片段显式标出来，减少正文噪声干扰。
 
 ---
 
@@ -721,20 +725,13 @@ main.py
 - `api_metadata_enricher`
 - `paper_lookup`
 
-### 15.2A 收敛 `reports_json` 到单一目录
+### 15.2A `reports_json` 已收敛到单一目录
 
-当前为了兼容不同的静态服务根目录，主流程会同时写：
+前端现在只读取根目录下的：
 
 - `reports_json/`
-- `webapp/reports_json/`
 
-这能工作，但会引入维护成本和理解负担。后续应收敛为**只保留一个 JSON 目录**，避免双份镜像长期并存。
-
-更推荐的方向：
-
-- 保留根目录 `reports_json/` 作为唯一真实产物
-- 前端和部署方式统一围绕这一目录组织
-- `webapp/` 只保留静态页面本身，不再存一份 JSON 镜像
+`webapp/` 只保留静态页面本身，不再存放一份 JSON 镜像。这样目录职责更清晰，也减少了生成产物双写带来的维护成本。
 
 ### 15.3 作者关系 / 校企合作判断
 
@@ -757,12 +754,6 @@ main.py
 - `reports_json/index.json`
 - `reports_json/daily/daily_report_YYYY-MM-DD.json`
 - `reports_json/selected/selected_papers_YYYY-MM-DD.json`
-
-为了兼容不同的静态服务根目录，主流程还会同步写一份镜像到：
-
-- `webapp/reports_json/index.json`
-- `webapp/reports_json/daily/daily_report_YYYY-MM-DD.json`
-- `webapp/reports_json/selected/selected_papers_YYYY-MM-DD.json`
 
 页面当前提供两个标签页：
 
