@@ -91,6 +91,42 @@ TOPICS_OF_INTEREST = """
 # 可选：anthropic | kimi | zhipu | deepseek | custom
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 
+# provider 注册表：统一定义 base_url / 默认模型 / API key 环境变量。
+# llm.py 只负责按 tier 选择模型并发请求，不再内嵌 provider 配置。
+LLM_PROVIDER_REGISTRY = {
+    "anthropic": {
+        "base_url": None,
+        "fast_model": "claude-haiku-4-5",
+        "strong_model": "claude-opus-4-6",
+        "api_key_env": "ANTHROPIC_API_KEY",
+    },
+    "kimi": {
+        "base_url": "https://api.moonshot.cn/v1",
+        "fast_model": "moonshot-v1-32k",
+        "strong_model": "kimi-k2.6",
+        "api_key_env": "MOONSHOT_API_KEY",
+    },
+    "zhipu": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+        "fast_model": "glm-4-flash",
+        "strong_model": "glm-4-plus",
+        "api_key_env": "ZHIPU_API_KEY",
+    },
+    "deepseek": {
+        "base_url": "https://api.deepseek.com/v1",
+        "fast_model": "deepseek-v4-flash",
+        "strong_model": "deepseek-v4-pro",
+        "api_key_env": "DEEPSEEK_API_KEY",
+    },
+    # 任意 OpenAI 兼容接口：通过环境变量指定 base_url 与模型名。
+    "custom": {
+        "base_url": os.getenv("LLM_BASE_URL", ""),
+        "fast_model": os.getenv("FAST_MODEL", "gpt-4o-mini"),
+        "strong_model": os.getenv("STRONG_MODEL", "gpt-4o"),
+        "api_key_env": "LLM_API_KEY",
+    },
+}
+
 # 模型分档：
 # - fast 档用于标题粗筛 / 机构推断（任务简单，要便宜快）
 # - strong 档用于摘要精排 / 深度精读（需要语义理解和打分判断）

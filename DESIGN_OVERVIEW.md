@@ -164,7 +164,7 @@
 - [`selected_report.py`](selected_report.py)：入选快照（selected 集的全量评分明细、机构、加分扣分占位列、方向汇总）
 - [`reporter.py`](reporter.py)：最终日报（按阈值 + 最小数动态挑选"重点论文"展示，外加深度简报）
 - [`serializers.py`](serializers.py)：前端 JSON 导出（daily / selected / index）
-- [`webapp/`](webapp/)：静态前端（`Daily` / `Selected` 两个标签页），直接读取 JSON
+- [`webapp/`](webapp/)：静态前端（`Highlight` / `Longlist` 两个标签页），直接读取 JSON
 
 ### 4.8 基础设施
 
@@ -462,21 +462,21 @@ Anthropic 后端会启用 `thinking=adaptive`，其它 provider 直接生成。
 
 ### 9.2 多 provider × 两档默认
 
-[`PROVIDERS`](llm.py) 注册表（每个 provider 同时定义 fast / strong 两档默认模型）：
+[`config.LLM_PROVIDER_REGISTRY`](config.py) 注册表（每个 provider 同时定义 fast / strong 两档默认模型）：
 
 | provider | base_url | fast 默认 | strong 默认 | API key 环境变量 |
 |---|---|---|---|---|
 | anthropic | （SDK 默认）| `claude-haiku-4-5` | `claude-opus-4-6` | `ANTHROPIC_API_KEY` |
 | kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-32k` | `kimi-k2.6` | `MOONSHOT_API_KEY` |
 | zhipu | `https://open.bigmodel.cn/api/paas/v4/` | `glm-4-flash` | `glm-4-plus` | `ZHIPU_API_KEY` |
-| deepseek | `https://api.deepseek.com/v1` | `deepseek-chat` | `deepseek-reasoner` | `DEEPSEEK_API_KEY` |
+| deepseek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | `deepseek-v4-pro` | `DEEPSEEK_API_KEY` |
 | custom | `LLM_BASE_URL` | `FAST_MODEL` env | `STRONG_MODEL` env | `LLM_API_KEY` |
 
 环境变量覆盖优先级（每档独立）：
 
 ```
-config.FAST_MODEL  > PROVIDERS[provider][1]   # fast 档
-config.STRONG_MODEL > PROVIDERS[provider][2]  # strong 档
+config.FAST_MODEL   > LLM_PROVIDER_REGISTRY[provider]["fast_model"]    # fast 档
+config.STRONG_MODEL > LLM_PROVIDER_REGISTRY[provider]["strong_model"]  # strong 档
 ```
 
 旧的 `LLM_MODEL` 环境变量被当作 `STRONG_MODEL` 兼容值，不影响 fast 档默认。
@@ -746,7 +746,7 @@ main.py
 - `models.Paper.merge_non_empty` 的单测（合并语义）
 - `_normalize_ranked_papers` 的单测（兜底逻辑）
 
-### 15.5 前端展示（Daily + Selected）
+### 15.5 前端展示（Highlight + Longlist）
 
 当前已经有一个首版静态前端：[`webapp/index.html`](webapp/index.html)。
 前端不解析 Markdown，而是直接消费 `reports_json/` 下的结构化数据：
@@ -757,8 +757,8 @@ main.py
 
 页面当前提供两个标签页：
 
-- `Daily`：展示重点论文速览、单篇详情、深度简报
-- `Selected`：展示 selected 全量评分表、方向汇总、排序/筛选/搜索
+- `Highlight`：展示重点论文速览、重点论文列表、深度简报
+- `Longlist`：展示 selected 全量评分表、方向汇总、排序/筛选/搜索
 
 可能的形态：
 

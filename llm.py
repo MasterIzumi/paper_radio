@@ -1,8 +1,10 @@
 """
-LLM 后端抽象层
-支持：anthropic | kimi | zhipu | deepseek（以及任意 OpenAI 兼容接口）
+LLM 后端抽象层。
 
-通过 config.py 中的 LLM_PROVIDER 和 LLM_API_KEY 切换。
+provider 注册信息放在 config.py，当前文件只负责：
+- 按 tier 解析 provider / model / api key
+- 发起实际 LLM 请求
+- 处理日志与 JSON 抽取
 """
 from __future__ import annotations
 
@@ -15,21 +17,6 @@ from typing import Any, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Provider 注册表 ────────────────────────────────────────────────────────────
-# name -> (base_url, fast_default_model, strong_default_model)
-# fast 档：标题粗筛 / 机构推断这类轻语义任务，要便宜快
-# strong 档：摘要精排 / 深度精读，需要更强的判断力
-PROVIDERS = {
-    "anthropic": (None,                                     "claude-haiku-4-5",     "claude-opus-4-6"),
-    "kimi":      ("https://api.moonshot.cn/v1",             "moonshot-v1-32k",      "kimi-k2.6"),
-    "zhipu":     ("https://open.bigmodel.cn/api/paas/v4/",  "glm-4-flash",          "glm-4-plus"),
-    "deepseek":  ("https://api.deepseek.com/v1",            "deepseek-v4-flash",    "deepseek-v4-pro"),
-    # 兼容任意 OpenAI endpoint：在 config 里设 LLM_PROVIDER="custom"
-    # 并设 LLM_BASE_URL + FAST_MODEL / STRONG_MODEL
-    "custom":    (os.getenv("LLM_BASE_URL", ""),            os.getenv("FAST_MODEL", "gpt-4o-mini"),
-                                                            os.getenv("STRONG_MODEL", "gpt-4o")),
-}
-
 VALID_TIERS = ("fast", "strong")
 
 
@@ -40,27 +27,23 @@ def _get_settings(tier: str = "strong"):
 
     import config
     provider = getattr(config, "LLM_PROVIDER", "anthropic").lower()
-    if provider not in PROVIDERS:
-        raise ValueError(f"未知 LLM_PROVIDER: {provider}，可选：{list(PROVIDERS)}")
+    registry = getattr(config, "LLM_PROVIDER_REGISTRY", {})
+    if provider not in registry:
+        raise ValueError(f"未知 LLM_PROVIDER: {provider}，可选：{list(registry)}")
 
-    base_url, fast_default, strong_default = PROVIDERS[provider]
+    provider_cfg = registry[provider]
     overrides = {
         "fast":   getattr(config, "FAST_MODEL", "") or "",
         "strong": getattr(config, "STRONG_MODEL", "") or "",
     }
-    defaults = {"fast": fast_default, "strong": strong_default}
-    model = overrides[tier] or defaults[tier]
-
-    key_env = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "kimi":      "MOONSHOT_API_KEY",
-        "zhipu":     "ZHIPU_API_KEY",
-        "deepseek":  "DEEPSEEK_API_KEY",
-        "custom":    "LLM_API_KEY",
+    defaults = {
+        "fast": provider_cfg["fast_model"],
+        "strong": provider_cfg["strong_model"],
     }
-    api_key = os.getenv(key_env.get(provider, "LLM_API_KEY"), "")
+    model = overrides[tier] or defaults[tier]
+    api_key = os.getenv(provider_cfg.get("api_key_env", "LLM_API_KEY"), "")
 
-    return provider, api_key, base_url, model
+    return provider, api_key, provider_cfg.get("base_url"), model
 
 
 def get_active_model(tier: str = "strong") -> str:
