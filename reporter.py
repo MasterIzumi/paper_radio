@@ -87,12 +87,14 @@ def generate_report(
     *,
     categories: List[str] | None = None,
     report_date: str | None = None,
+    auto_deep_analysis: bool = False,
 ) -> str:
     """生成完整的每日 Markdown 报告。"""
     markdown, _ = generate_report_bundle(
         ranked_papers,
         categories=list(categories or FETCH_CATEGORIES),
         report_date=report_date,
+        auto_deep_analysis=auto_deep_analysis,
     )
     return markdown
 
@@ -102,6 +104,7 @@ def generate_report_bundle(
     *,
     categories: List[str],
     report_date: str | None = None,
+    auto_deep_analysis: bool = False,
 ) -> tuple[str, dict]:
     """一次生成 Markdown 报告和前端 JSON 载荷，避免重复精读。"""
     now = datetime.now()
@@ -207,7 +210,9 @@ def generate_report_bundle(
 
     lines += ["---", ""]
 
-    deep_analysis_papers = _select_deep_analysis_papers(ranked_papers)
+    deep_analysis_papers = (
+        _select_deep_analysis_papers(ranked_papers) if auto_deep_analysis else []
+    )
     deep_analysis_entries = []
 
     # ── 深度简报 ──────────────────────────────────────────────────────────────
@@ -222,7 +227,9 @@ def generate_report_bundle(
         "",
     ]
 
-    if not deep_analysis_papers:
+    if not auto_deep_analysis:
+        lines += ["深度分析默认改为按需生成，可在本地 Dashboard 中对单篇论文触发精读。", ""]
+    elif not deep_analysis_papers:
         lines += ["今日没有达到精读阈值的论文，因此不生成深度分析。", ""]
 
     for i, paper in enumerate(deep_analysis_papers, 1):

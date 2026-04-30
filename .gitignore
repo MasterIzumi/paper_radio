@@ -3,3 +3,4 @@
 reports/*
 reports_json/*
 .DS_Store
+paper_radio.db

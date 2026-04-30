@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Paper Radio Dashboard</title>
-    <link rel="stylesheet" href="./styles.css?v=20260428-1" />
+    <link rel="stylesheet" href="./styles.css?v=20260501-5" />
   </head>
   <body>
     <div class="page-shell">
@@ -15,8 +15,39 @@
       <div id="error-banner" class="banner error hidden"></div>
 
       <div class="app-layout">
-        <aside class="sidebar panel">
-          <div id="date-rail" class="date-rail"></div>
+        <aside class="sidebar">
+          <div id="mining-widget" class="mining-widget collapsed">
+            <button id="mining-toggle" class="mining-toggle" type="button" aria-expanded="false" title="挖掘任务">
+              <span class="mining-spinner" aria-hidden="true"></span>
+              <span class="mining-toggle-icon" aria-hidden="true">
+                <img src="./assets/icons/radar-2-svgrepo-com.svg" alt="" />
+              </span>
+              <span class="mining-toggle-text">论文挖掘</span>
+            </button>
+            <form id="mining-form" class="task-panel">
+              <div class="task-controls">
+                <label class="field compact">
+                  <span>追溯天数</span>
+                  <input id="mining-days" type="number" min="1" max="30" value="1" />
+                </label>
+                <label class="field">
+                  <span>分区</span>
+                  <input id="mining-categories" type="text" value="cs.CV,cs.RO" />
+                </label>
+                <button class="primary-button" type="submit">运行挖掘</button>
+                <button id="job-cancel-button" class="secondary-button hidden" type="button">停止任务</button>
+                <button id="job-reset-button" class="secondary-button hidden" type="button">重置状态</button>
+                <div id="job-status" class="job-status">本地服务连接后可从这里启动任务。</div>
+              </div>
+              <div class="task-log-panel">
+                <div class="task-log-title">任务日志</div>
+                <div id="job-log" class="job-log hidden"></div>
+              </div>
+            </form>
+          </div>
+          <div class="date-panel panel">
+            <div id="date-rail" class="date-rail"></div>
+          </div>
         </aside>
 
         <div class="content-shell">
@@ -39,47 +70,14 @@
           </header>
 
           <nav class="tabs" aria-label="结果层次切换">
-            <button class="tab-button active" data-tab="daily">Highlight</button>
-            <button class="tab-button" data-tab="selected">Longlist</button>
+            <button class="tab-button active" data-tab="selected">Longlist</button>
+            <button class="tab-button" data-tab="daily">Highlight</button>
+            <button class="tab-button" data-tab="deep">AI Insights</button>
+            <button class="tab-button" data-tab="favorites">Favorites</button>
           </nav>
 
           <main>
-        <section id="daily-tab" class="tab-panel active">
-          <div class="summary-grid" id="daily-summary-cards"></div>
-
-          <section class="panel">
-            <div class="section-head">
-              <div>
-                <p class="eyebrow">Highlight</p>
-                <h2>重点论文速览</h2>
-              </div>
-              <p class="section-note" id="daily-threshold-note"></p>
-            </div>
-            <div id="daily-top-grid" class="paper-grid"></div>
-          </section>
-
-          <section class="panel detail-panel">
-            <div class="section-head">
-              <div>
-                <p class="eyebrow">Detail</p>
-                <h2>重点论文详情</h2>
-              </div>
-            </div>
-            <div id="daily-detail" class="detail-empty">点击上方论文卡片查看完整信息。</div>
-          </section>
-
-          <section class="panel">
-            <div class="section-head">
-              <div>
-                <p class="eyebrow">Deep Analysis</p>
-                <h2>深度简报</h2>
-              </div>
-            </div>
-            <div id="deep-analysis-list" class="analysis-stack"></div>
-          </section>
-        </section>
-
-        <section id="selected-tab" class="tab-panel">
+        <section id="selected-tab" class="tab-panel active">
           <section class="panel">
             <div class="section-head">
               <div>
@@ -133,6 +131,7 @@
                     <th>相关性</th>
                     <th>新颖性</th>
                     <th>一句话总结</th>
+                    <th>操作</th>
                   </tr>
                 </thead>
                 <tbody id="selected-table-body"></tbody>
@@ -140,11 +139,71 @@
             </div>
           </section>
         </section>
+
+        <section id="daily-tab" class="tab-panel">
+          <div class="summary-grid" id="daily-summary-cards"></div>
+
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Highlight</p>
+                <h2>重点论文速览</h2>
+              </div>
+              <p class="section-note" id="daily-threshold-note"></p>
+            </div>
+            <div id="daily-top-grid" class="paper-grid"></div>
+          </section>
+
+          <section class="panel detail-panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Detail</p>
+                <h2>重点论文详情</h2>
+              </div>
+            </div>
+            <div id="daily-detail" class="detail-empty">点击上方论文卡片查看完整信息。</div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Deep Analysis</p>
+                <h2>深度简报</h2>
+              </div>
+            </div>
+            <div id="deep-analysis-list" class="analysis-stack"></div>
+          </section>
+        </section>
+
+        <section id="deep-tab" class="tab-panel">
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">AI Insights</p>
+                <h2>AI解读</h2>
+              </div>
+              <p class="section-note">展示已由 AI 自动解读的论文，点击条目可在新页面查看完整解读报告。</p>
+            </div>
+            <div id="deep-read-list" class="deep-read-list"></div>
+          </section>
+        </section>
+
+        <section id="favorites-tab" class="tab-panel">
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Saved</p>
+                <h2>收藏列表</h2>
+              </div>
+            </div>
+            <div id="favorites-list" class="favorites-list"></div>
+          </section>
+        </section>
           </main>
         </div>
       </div>
     </div>
 
-    <script src="./app.js?v=20260428-1"></script>
+    <script src="./app.js?v=20260501-5"></script>
   </body>
 </html>

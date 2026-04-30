@@ -49,7 +49,8 @@ body {
 .hero,
 .panel,
 .banner,
-.tabs {
+.tabs,
+.date-panel {
   backdrop-filter: blur(14px);
 }
 
@@ -67,11 +68,95 @@ body {
 .sidebar {
   position: sticky;
   top: 12px;
-  padding: 10px 8px;
   width: 104px;
-  min-height: 70vh;
   overflow: visible;
   z-index: 10;
+}
+
+.mining-widget {
+  position: relative;
+  z-index: 20;
+  margin-bottom: 14px;
+}
+
+.date-panel {
+  padding: 10px 8px;
+  min-height: 70vh;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.mining-toggle {
+  width: 100%;
+  min-height: 72px;
+  border: 1px solid rgba(164, 77, 31, 0.22);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 247, 237, 0.98), rgba(242, 216, 191, 0.78));
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  box-shadow: 0 12px 30px rgba(109, 36, 16, 0.12);
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.mining-toggle:hover,
+.mining-widget.expanded .mining-toggle {
+  background:
+    linear-gradient(180deg, rgba(255, 241, 225, 1), rgba(235, 199, 165, 0.9));
+  border-color: rgba(164, 77, 31, 0.36);
+  transform: translateY(-1px);
+}
+
+.mining-spinner {
+  display: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(164, 77, 31, 0.2);
+  border-top-color: var(--accent-strong);
+  border-radius: 999px;
+}
+
+.mining-widget.running .mining-spinner {
+  display: block;
+  animation: spin 850ms linear infinite;
+}
+
+.mining-widget.running .mining-toggle-icon {
+  display: none;
+}
+
+.mining-toggle-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: rgba(164, 77, 31, 0.12);
+  line-height: 1;
+}
+
+.mining-toggle-icon img {
+  width: 24px;
+  height: 24px;
+  display: block;
+  opacity: 0.82;
+}
+
+.mining-toggle-text {
+  letter-spacing: 0;
+  writing-mode: horizontal-tb;
+  line-height: 1.25;
+  max-width: 4.5em;
+  text-align: center;
+  white-space: normal;
 }
 
 .date-rail {
@@ -222,6 +307,222 @@ h2 {
   font: inherit;
 }
 
+.task-panel {
+  display: grid;
+  grid-template-columns: 220px;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: rgba(255, 252, 246, 0.72);
+}
+
+.mining-widget .task-panel {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 10px);
+  width: min(258px, calc(100vw - 150px));
+  background: rgba(255, 252, 246, 0.98);
+  box-shadow: var(--shadow);
+}
+
+.task-controls {
+  display: grid;
+  gap: 12px;
+}
+
+.task-log-panel {
+  display: none;
+  min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.mining-widget.with-log .task-panel {
+  grid-template-columns: 220px minmax(420px, 1fr);
+  width: min(760px, calc(100vw - 150px));
+}
+
+.mining-widget.with-log .task-log-panel {
+  display: grid;
+}
+
+.task-log-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mining-widget.collapsed .task-panel {
+  display: none;
+}
+
+.primary-button,
+.secondary-button,
+.chip-button,
+.icon-button {
+  position: relative;
+  border: 1px solid rgba(164, 77, 31, 0.22);
+  background: rgba(255, 247, 237, 0.94);
+  color: var(--accent-strong);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 9px);
+  z-index: 50;
+  width: max-content;
+  max-width: 220px;
+  padding: 7px 9px;
+  border: 1px solid rgba(109, 36, 16, 0.12);
+  border-radius: 10px;
+  background: rgba(58, 42, 26, 0.94);
+  color: #fffaf3;
+  box-shadow: 0 12px 24px rgba(58, 42, 26, 0.18);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  pointer-events: none;
+  text-align: center;
+  transform: translate(-50%, 4px);
+  opacity: 0;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+[data-tooltip]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 4px);
+  z-index: 51;
+  border: 5px solid transparent;
+  border-top-color: rgba(58, 42, 26, 0.94);
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  opacity: 0;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+[data-tooltip]:hover::after,
+[data-tooltip]:focus-visible::after,
+[data-tooltip]:hover::before,
+[data-tooltip]:focus-visible::before {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.primary-button {
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+
+.secondary-button {
+  border-radius: 14px;
+  padding: 11px 14px;
+  background: rgba(255, 236, 229, 0.92);
+  color: #7e2215;
+  border-color: rgba(126, 34, 21, 0.22);
+}
+
+.primary-button.small {
+  padding: 9px 12px;
+}
+
+.chip-button {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.icon-button {
+  min-width: 32px;
+  height: 32px;
+  border-radius: 10px;
+}
+
+.ai-insight-button {
+  display: inline-grid;
+  place-items: center;
+}
+
+.ai-insight-button img {
+  width: 18px;
+  height: 18px;
+  display: block;
+  opacity: 0.78;
+}
+
+.ai-insight-button.active {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  box-shadow: 0 8px 18px rgba(109, 36, 16, 0.18);
+}
+
+.ai-insight-button.active img {
+  filter: invert(1) brightness(1.8);
+  opacity: 0.95;
+}
+
+.primary-button:hover,
+.secondary-button:hover,
+.chip-button:hover,
+.icon-button:hover {
+  background: rgba(245, 222, 199, 0.95);
+  border-color: rgba(164, 77, 31, 0.34);
+  transform: translateY(-1px);
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.chip-button:disabled,
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+  filter: grayscale(0.35);
+}
+
+.favorite-button.active {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: #fffaf3;
+  box-shadow: 0 8px 18px rgba(109, 36, 16, 0.18);
+}
+
+.favorite-button.active:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.job-status {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.job-log {
+  min-height: 220px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(58, 42, 26, 0.06);
+  color: var(--muted);
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .field input:focus,
 .field select:focus {
   outline: 2px solid rgba(164, 77, 31, 0.18);
@@ -363,6 +664,13 @@ main {
   margin-top: 12px;
 }
 
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 .link-chip {
   display: inline-flex;
   align-items: center;
@@ -502,6 +810,11 @@ main {
   overflow-x: auto;
 }
 
+.table-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -559,6 +872,69 @@ main {
   opacity: 0.78;
 }
 
+.favorites-list,
+.deep-read-list {
+  display: grid;
+  gap: 14px;
+}
+
+.favorite-card,
+.deep-read-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 252, 246, 0.82);
+}
+
+.deep-read-card {
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.deep-read-card:hover {
+  border-color: rgba(164, 77, 31, 0.32);
+  box-shadow: 0 14px 30px rgba(109, 36, 16, 0.1);
+  transform: translateY(-1px);
+}
+
+.favorite-card h3,
+.deep-read-card h3 {
+  margin-top: 6px;
+  font-size: 21px;
+  line-height: 1.24;
+}
+
+.deep-read-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 260px;
+}
+
+.on-demand-analysis {
+  margin-top: 16px;
+}
+
+.report-page {
+  max-width: 980px;
+}
+
+.report-reader h1 {
+  font-size: clamp(32px, 5vw, 58px);
+  line-height: 0.98;
+}
+
+.report-body {
+  margin-top: 22px;
+  white-space: pre-wrap;
+}
+
 a {
   color: var(--accent-strong);
 }
@@ -574,6 +950,12 @@ a {
   }
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 920px) {
   .app-layout {
     grid-template-columns: 1fr;
@@ -582,8 +964,17 @@ a {
   .sidebar {
     position: static;
     width: 100%;
-    min-height: 0;
     overflow: visible;
+  }
+
+  .mining-widget .task-panel {
+    position: static;
+    width: 100%;
+    margin-top: 10px;
+  }
+
+  .task-panel {
+    grid-template-columns: 1fr;
   }
 
   .hero {
@@ -591,8 +982,15 @@ a {
   }
 
   .summary-grid,
-  .detail-grid {
+  .detail-grid,
+  .favorite-card,
+  .deep-read-card {
     grid-template-columns: 1fr;
+  }
+
+  .deep-read-meta {
+    justify-content: flex-start;
+    max-width: none;
   }
 }
 

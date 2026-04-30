@@ -30,7 +30,7 @@
 1. 抓取 arXiv 最近几天的新论文
 2. 按用户兴趣方向做规则 + LLM 双重筛选并打分
 3. 输出抓取快照、入选快照、最终日报三层 Markdown，并同步导出前端 JSON
-4. 对总分达到阈值的少量论文做深度简报（方法介绍 / 贡献锐评 / 影响力预测）
+4. 默认不自动精读，由本地 Dashboard 对用户选中的论文按需生成深度简报（方法介绍 / 贡献锐评 / 影响力预测）
 5. 对 selected 集论文，用 PDF 首页文本驱动 LLM 做机构归一
 
 用户当前关注方向集中在 [`config.py`](config.py) 的 `TOPICS_OF_INTEREST`：
@@ -71,7 +71,7 @@
 3. LLM **标题粗筛**（只发标题，省 token）
 4. 对 selected 集做 **PDF 首页驱动的机构归一**
 5. LLM **摘要精排**（发摘要，给评分 + 一句话总结）
-6. 仅对总分达到阈值的少量论文做 **深度简报**
+6. 在 Dashboard 中对用户选中的论文按需生成 **深度简报**
 
 总原则：**轻操作前置，重操作只留给少数高价值论文。**
 
@@ -162,11 +162,18 @@
 
 - [`recent_report.py`](recent_report.py)：抓取快照（全量论文表 + 每日 announce 统计）
 - [`selected_report.py`](selected_report.py)：入选快照（selected 集的全量评分明细、机构、加分扣分占位列、方向汇总）
-- [`reporter.py`](reporter.py)：最终日报（按阈值 + 最小数动态挑选"重点论文"展示，外加深度简报）
+- [`reporter.py`](reporter.py)：最终日报（按阈值 + 最小数动态挑选"重点论文"展示；深度简报默认由 Dashboard 按需触发）
 - [`serializers.py`](serializers.py)：前端 JSON 导出（daily / selected / index）
-- [`webapp/`](webapp/)：静态前端（`Highlight` / `Longlist` 两个标签页），直接读取 JSON
+- [`webapp/`](webapp/)：Dashboard 前端（`Longlist` / `Highlight` / `AI Insights` / `Favorites`），优先读取本地 API，保留静态 JSON fallback
 
-### 4.8 基础设施
+### 4.8 本地控制台层
+
+- [`run_dashboard.py`](run_dashboard.py)：一条命令启动本地 Dashboard，并自动打开浏览器。
+- [`server/`](server/)：FastAPI 本地服务，提供 reports / jobs / deep-analysis / favorites API，并托管 `webapp/`。
+- [`pipeline/`](pipeline/)：可复用业务流程层，CLI 和 API 共用同一条抓取、筛选、评分、导出链路。
+- [`storage/`](storage/)：SQLite 状态层，当前存储任务、任务日志、AI解读缓存和收藏列表。
+
+### 4.9 基础设施
 
 - [`http_client.py`](http_client.py)：进程内共享 `requests.Session`、统一 User-Agent、超时、重试 + 指数退避 + 抖动。所有抓取都走它（crawler / pdf_context / fulltext）。
 - [`logging_config.py`](logging_config.py)：`setup_logging()` 幂等初始化，默认 INFO，`PAPER_RADIO_LOG_LEVEL` 可改；urllib3 / openai / anthropic 等高频库压到 WARNING。
@@ -746,33 +753,35 @@ main.py
 - `models.Paper.merge_non_empty` 的单测（合并语义）
 - `_normalize_ranked_papers` 的单测（兜底逻辑）
 
-### 15.5 前端展示（Highlight + Longlist）
+### 15.5 本地 Dashboard（Longlist + Highlight + AI Insights + Favorites）
 
-当前已经有一个首版静态前端：[`webapp/index.html`](webapp/index.html)。
-前端不解析 Markdown，而是直接消费 `reports_json/` 下的结构化数据：
+当前已经有一个本地交互式 Dashboard：[`run_dashboard.py`](run_dashboard.py) 启动 FastAPI 服务并托管 [`webapp/index.html`](webapp/index.html)。
+前端不解析 Markdown，优先通过 `/api/reports/...` 读取数据；如果没有本地服务，也可以 fallback 到 `reports_json/` 静态浏览：
 
 - `reports_json/index.json`
 - `reports_json/daily/daily_report_YYYY-MM-DD.json`
 - `reports_json/selected/selected_papers_YYYY-MM-DD.json`
 
-页面当前提供两个标签页：
+页面当前提供四个标签页：
 
-- `Highlight`：展示重点论文速览、重点论文列表、深度简报
 - `Longlist`：展示 selected 全量评分表、方向汇总、排序/筛选/搜索
+- `Highlight`：展示重点论文速览、重点论文列表、深度简报
+- `AI Insights`：展示已由 AI 自动解读的论文列表，并跳转独立报告页
+- `Favorites`：展示 SQLite 中跨日期保存的收藏论文
 
-可能的形态：
+当前本地 API 已支持：
 
-- 每日首页卡片流继续增强：更好的深度分析排版、按方向聚类
-- 历史归档页：按分数 / 机构 / 关键词筛选跨日期的论文
-- 后续可以新增 `Recent` 标签页，展示抓取层全量统计和原始清单
+- 页面触发 mining job（抓取 + 筛选 + 机构推断 + 评分 + 报告）
+- 对单篇论文按需触发 AI解读，缓存到 SQLite，并写入 `reports/deep_analysis/<arxiv_id>/deep_analysis.md`
+- 收藏 / 取消收藏论文
 
 当前的真实导出入口是：
 
 - [`models.py`](models.py) 中 `Paper.to_dict()` / `RankedPaper.to_dict()`
 - [`serializers.py`](serializers.py) 中 `build_selected_json_payload()` / `build_daily_json_payload()`
-- [`main.py`](main.py) 负责落盘和刷新 `reports_json/index.json`
+- [`pipeline/run.py`](pipeline/run.py) 负责落盘和刷新 `reports_json/index.json`
 
-这条路线仍然保持"无后端服务"：主流程产 JSON，静态前端渲染。
+这条路线是"本地服务负责执行，JSON/Markdown 继续作为可迁移产物"。静态发布仍可保留为只读展示模式，但不能触发本地任务。
 
 ### 15.6 外网访问 + 每日定时运行
 
@@ -814,4 +823,4 @@ main.py
 
 `paper_radio` 当前不是"一个爬虫脚本"，而是：
 
-**一个以 arXiv recent 页面为输入、以用户研究偏好为核心、通过"规则预筛 + LLM 标题粗筛 + selected 集机构归一 + LLM 摘要精排 + 阈值过滤的深度精读"逐层收缩的论文筛选与摘要系统；数据用 dataclass 串联，prompt 模板外部化，HTTP / 日志 / LLM 调用走统一基础设施层，并同步产出 Markdown + JSON 供静态前端消费。**
+**一个以 arXiv recent 页面为输入、以用户研究偏好为核心、通过"规则预筛 + LLM 标题粗筛 + selected 集机构归一 + LLM 摘要精排 + 用户按需 AI解读"逐层收缩的论文筛选与摘要系统；数据用 dataclass 串联，prompt 模板外部化，HTTP / 日志 / LLM 调用走统一基础设施层，并通过本地 FastAPI Dashboard 提供任务触发、AI解读、收藏和 Markdown + JSON 产物浏览。**
