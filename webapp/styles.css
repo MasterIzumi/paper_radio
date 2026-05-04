@@ -80,7 +80,7 @@ body {
 }
 
 .date-panel {
-  padding: 10px 8px;
+  padding: 8px 3px;
   min-height: 70vh;
   border: 1px solid var(--border);
   background: var(--panel);
@@ -164,11 +164,20 @@ body {
   gap: 8px;
   max-height: calc(70vh - 20px);
   overflow-y: auto;
-  padding-right: 2px;
+  margin-right: 0;
+  padding-right: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.date-rail::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .rail-date {
   width: 100%;
+  box-sizing: border-box;
   border: 1px solid transparent;
   border-radius: 16px;
   padding: 10px 4px 9px;

@@ -521,7 +521,7 @@ function renderDailyDetail() {
 
   el.dailyDetail.innerHTML = `
     <article class="detail-card">
-      <p class="eyebrow">Highlight Detail</p>
+      <p class="eyebrow">Highlights Detail</p>
       <h3>${escapeHtml(paper.title)}</h3>
       <p class="subtle">${escapeHtml(paper.authors_display || joinOrDash(paper.authors))}</p>
       <div class="detail-tags">
@@ -797,7 +797,7 @@ function renderDeepReads() {
   }
   const items = state.deepReads.filter((item) => item.status === "succeeded");
   if (!items.length) {
-    el.deepReadList.innerHTML = '<div class="detail-empty">还没有已完成的 AI解读。可以从 Highlight 卡片或 Longlist 表格里点击“AI解读”生成。</div>';
+    el.deepReadList.innerHTML = '<div class="detail-empty">还没有已完成的 AI解读。可以从 Highlights 卡片或 Longlist 表格里点击“AI解读”生成。</div>';
     return;
   }
   el.deepReadList.innerHTML = items

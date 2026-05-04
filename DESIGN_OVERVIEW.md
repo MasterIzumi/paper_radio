@@ -164,7 +164,7 @@
 - [`selected_report.py`](selected_report.py)：入选快照（selected 集的全量评分明细、机构、加分扣分占位列、方向汇总）
 - [`reporter.py`](reporter.py)：最终日报（按阈值 + 最小数动态挑选"重点论文"展示；深度简报默认由 Dashboard 按需触发）
 - [`serializers.py`](serializers.py)：前端 JSON 导出（daily / selected / index）
-- [`webapp/`](webapp/)：Dashboard 前端（`Longlist` / `Highlight` / `AI Insights` / `Favorites`），优先读取本地 API，保留静态 JSON fallback
+- [`webapp/`](webapp/)：Dashboard 前端（`Longlist` / `Highlights` / `AI Insights` / `Favorites`），优先读取本地 API，保留静态 JSON fallback
 
 ### 4.8 本地控制台层
 
@@ -753,7 +753,7 @@ main.py
 - `models.Paper.merge_non_empty` 的单测（合并语义）
 - `_normalize_ranked_papers` 的单测（兜底逻辑）
 
-### 15.5 本地 Dashboard（Longlist + Highlight + AI Insights + Favorites）
+### 15.5 本地 Dashboard（Longlist + Highlights + AI Insights + Favorites）
 
 当前已经有一个本地交互式 Dashboard：[`run_dashboard.py`](run_dashboard.py) 启动 FastAPI 服务并托管 [`webapp/index.html`](webapp/index.html)。
 前端不解析 Markdown，优先通过 `/api/reports/...` 读取数据；如果没有本地服务，也可以 fallback 到 `reports_json/` 静态浏览：
@@ -765,7 +765,7 @@ main.py
 页面当前提供四个标签页：
 
 - `Longlist`：展示 selected 全量评分表、方向汇总、排序/筛选/搜索
-- `Highlight`：展示重点论文速览、重点论文列表、深度简报
+- `Highlights`：展示重点论文速览、重点论文列表、深度简报
 - `AI Insights`：展示已由 AI 自动解读的论文列表，并跳转独立报告页
 - `Favorites`：展示 SQLite 中跨日期保存的收藏论文
 
