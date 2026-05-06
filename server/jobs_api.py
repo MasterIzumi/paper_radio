@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import config
+import runtime_config
 from pipeline.run import PipelineCanceled, run_mining_pipeline
 from recent_report import parse_categories_arg
 from storage import db
@@ -42,6 +43,7 @@ def _run_job(job_id: str, params: dict) -> None:
             raise JobCanceled("任务已取消")
         db.update_job(job_id, status="running", progress=1, started=True)
         db.add_job_log(job_id, "任务开始")
+        runtime_config.apply_overrides_to_config()
         result = run_mining_pipeline(
             days=int(params["days"]),
             categories=list(params["categories"]),
@@ -77,22 +79,31 @@ def _run_job(job_id: str, params: dict) -> None:
 
 @router.post("/mining")
 def create_mining_job(request: MiningJobRequest):
+    return _create_mining_job(request.days, request.categories, source="manual")
+
+
+def _create_mining_job(days: int, categories: Union[List[str], str], source: str = "manual"):
     if db.has_running_job("mining"):
         raise HTTPException(status_code=409, detail="已有 mining 任务正在运行")
 
     raw_categories = (
-        ",".join(request.categories)
-        if isinstance(request.categories, list)
-        else request.categories
+        ",".join(categories)
+        if isinstance(categories, list)
+        else categories
     )
     categories = parse_categories_arg(raw_categories, config.FETCH_CATEGORIES)
     job_id = uuid.uuid4().hex
-    params = {"days": request.days, "categories": categories}
+    params = {"days": days, "categories": categories, "source": source}
     db.create_job(job_id, "mining", params)
 
     thread = threading.Thread(target=_run_job, args=(job_id, params), daemon=True)
     thread.start()
     return {"job_id": job_id, "status": "queued"}
+
+
+def create_scheduled_mining_job(days: int, categories: List[str], source: str = "scheduled") -> str:
+    payload = _create_mining_job(days, categories, source=source)
+    return payload["job_id"]
 
 
 @router.get("")

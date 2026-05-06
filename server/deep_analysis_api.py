@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -71,6 +72,40 @@ def _run_deep_analysis(arxiv_id: str, date: str) -> None:
         db.upsert_deep_analysis(arxiv_id, date, status="failed", error=str(exc))
 
 
+def _run_deep_analysis_job(job_id: str, arxiv_id: str, date: str) -> None:
+    try:
+        db.update_job(job_id, status="running", progress=5, started=True)
+        db.add_job_log(job_id, f"开始生成 {arxiv_id} 的 AI解读")
+        result = run_deep_analysis_for_paper(arxiv_id, date=date)
+        db.upsert_deep_analysis(
+            arxiv_id,
+            date,
+            status="succeeded",
+            analysis_markdown=result["analysis_markdown"],
+        )
+        db.update_job(
+            job_id,
+            status="succeeded",
+            progress=100,
+            result={
+                "arxiv_id": arxiv_id,
+                "date": date,
+                "report_path": result.get("report_path", ""),
+            },
+            finished=True,
+        )
+        db.add_job_log(job_id, "AI解读完成")
+    except Exception as exc:
+        db.upsert_deep_analysis(arxiv_id, date, status="failed", error=str(exc))
+        db.update_job(
+            job_id,
+            status="failed",
+            error=str(exc),
+            finished=True,
+        )
+        db.add_job_log(job_id, f"AI解读失败：{exc}", level="error")
+
+
 @router.post("/{arxiv_id}/deep-analysis")
 def create_deep_analysis(arxiv_id: str, date: str = Query(default="")):
     cached = db.get_deep_analysis(arxiv_id, date)
@@ -80,7 +115,20 @@ def create_deep_analysis(arxiv_id: str, date: str = Query(default="")):
         return _with_metadata(cached)
 
     db.upsert_deep_analysis(arxiv_id, date, status="running")
-    thread = threading.Thread(target=_run_deep_analysis, args=(arxiv_id, date), daemon=True)
+    metadata = _metadata_for(arxiv_id, date=date)
+    job_id = uuid.uuid4().hex
+    db.create_job(
+        job_id,
+        "AI解读",
+        {
+            "arxiv_id": arxiv_id,
+            "date": date,
+            "title": metadata.get("title", arxiv_id),
+            "source": "manual",
+        },
+    )
+    db.add_job_log(job_id, "任务排队中")
+    thread = threading.Thread(target=_run_deep_analysis_job, args=(job_id, arxiv_id, date), daemon=True)
     thread.start()
     return _with_metadata(db.get_deep_analysis(arxiv_id, date) or {})
 

@@ -1,0 +1,15 @@
+.math-inline,
+.math-display {
+  font-family: "Times New Roman", serif;
+  color: var(--accent-strong, #7b3518);
+}
+
+.math-inline {
+  padding: 0 0.08em;
+}
+
+.math-display {
+  display: block;
+  margin: 10px 0;
+  text-align: center;
+}

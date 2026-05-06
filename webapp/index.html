@@ -4,9 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Paper Radio Dashboard</title>
-    <link rel="stylesheet" href="./styles.css?v=20260502-1" />
+    <link rel="stylesheet" href="./vendor/simple-math.css?v=20260507-1" />
+    <link rel="stylesheet" href="./styles.css?v=20260507-1" />
   </head>
   <body>
+    <div id="workspace-backdrop" class="workspace-backdrop hidden"></div>
     <div class="page-shell">
       <div id="protocol-warning" class="banner hidden">
         浏览器通常会阻止 `file://` 页面直接 `fetch` 本地 JSON。建议在仓库根目录运行一个简单静态服务，再打开
@@ -23,9 +25,20 @@
                 <img src="./assets/icons/radar-2-svgrepo-com.svg" alt="" />
               </span>
               <span class="mining-toggle-text">论文挖掘</span>
+              <span id="schedule-indicator" class="schedule-indicator hidden">定时 ON</span>
             </button>
-            <form id="mining-form" class="task-panel">
-              <div class="task-controls">
+            <div class="task-panel mining-panel">
+              <div class="mining-tabs" role="tablist" aria-label="挖掘方式">
+                <button class="mining-tab-button active" data-mining-tab="manual" type="button">手动挖掘</button>
+                <button class="mining-tab-button" data-mining-tab="schedule" type="button">定时挖掘</button>
+              </div>
+              <form id="mining-form" class="task-controls mining-tab-panel active" data-mining-panel="manual">
+                <div class="section-head compact-head">
+                  <div>
+                    <p class="eyebrow">Manual</p>
+                    <h2>手动挖掘</h2>
+                  </div>
+                </div>
                 <label class="field compact">
                   <span>追溯天数</span>
                   <input id="mining-days" type="number" min="1" max="30" value="1" />
@@ -37,13 +50,83 @@
                 <button class="primary-button" type="submit">运行挖掘</button>
                 <button id="job-cancel-button" class="secondary-button hidden" type="button">停止任务</button>
                 <button id="job-reset-button" class="secondary-button hidden" type="button">重置状态</button>
+                <progress id="job-progress" class="job-progress hidden" value="0" max="100"></progress>
                 <div id="job-status" class="job-status">本地服务连接后可从这里启动任务。</div>
-              </div>
+              </form>
+              <form id="schedule-form" class="schedule-form mining-schedule mining-tab-panel" data-mining-panel="schedule">
+                <div class="section-head compact-head">
+                  <div>
+                    <p class="eyebrow">Automation</p>
+                    <h2>定时挖掘</h2>
+                  </div>
+                </div>
+                <label class="switch-row">
+                  <span class="switch-copy">
+                    <strong>启用定时挖掘</strong>
+                    <em>到点后自动创建挖掘任务</em>
+                  </span>
+                  <span class="switch-control">
+                    <input id="schedule-enabled" type="checkbox" />
+                    <span class="switch-slider" aria-hidden="true"></span>
+                  </span>
+                </label>
+                <div id="schedule-fields" class="schedule-fields hidden" hidden>
+                  <label class="field compact">
+                    <span>时间</span>
+                    <input id="schedule-time" type="time" value="09:00" />
+                  </label>
+                  <label class="field compact">
+                    <span>天数</span>
+                    <input id="schedule-days" type="number" min="1" max="30" value="1" />
+                  </label>
+                  <label class="field">
+                    <span>分区</span>
+                    <input id="schedule-categories" type="text" value="cs.CV,cs.RO" />
+                  </label>
+                  <button class="primary-button small" type="submit">保存定时</button>
+                  <button id="schedule-run-now" class="secondary-button small" type="button">立即试跑</button>
+                </div>
+                <p id="schedule-status" class="job-status">定时任务未加载。</p>
+              </form>
               <div class="task-log-panel">
                 <div class="task-log-title">任务日志</div>
                 <div id="job-log" class="job-log hidden"></div>
               </div>
-            </form>
+            </div>
+          </div>
+          <div id="task-widget" class="task-widget collapsed">
+            <button id="task-toggle" class="task-toggle" type="button" aria-expanded="false" title="任务栏">
+              <strong id="active-task-count">0</strong>
+              <span class="task-toggle-text">任务栏</span>
+            </button>
+            <section id="task-popover" class="task-popover">
+              <div class="section-head compact-head">
+                <div>
+                  <p class="eyebrow">Tasks</p>
+                  <h2>任务栏</h2>
+                </div>
+                <button id="tasks-refresh" class="chip-button" type="button">刷新</button>
+              </div>
+              <p class="section-note">查看挖掘、AI解读和定时任务的运行状态。</p>
+              <div id="task-list" class="task-list"></div>
+            </section>
+          </div>
+          <div id="config-widget" class="task-widget config-widget collapsed">
+            <button id="config-toggle" class="task-toggle" type="button" aria-expanded="false" title="配置面板">
+              <span class="task-toggle-icon" aria-hidden="true">⚙</span>
+              <span class="task-toggle-text">配置面板</span>
+            </button>
+            <section id="config-popover" class="task-popover config-popover">
+              <div class="section-head compact-head">
+                <div>
+                  <p class="eyebrow">Config</p>
+                  <h2>配置面板</h2>
+                </div>
+              </div>
+              <p class="section-note">API key 仍通过 .env 管理；这里仅保存非敏感覆盖配置。</p>
+              <div id="config-tabs" class="config-tabs"></div>
+              <div id="config-list" class="config-list"></div>
+            </section>
           </div>
           <div class="date-panel panel">
             <div id="date-rail" class="date-rail"></div>
@@ -115,6 +198,10 @@
               <label class="field search">
                 <span>关键词</span>
                 <input id="selected-search" type="search" placeholder="搜索标题或一句话总结" />
+              </label>
+              <label class="toggle-row">
+                <input id="selected-unread-only" type="checkbox" />
+                <span>仅未读</span>
               </label>
             </div>
 
@@ -204,6 +291,15 @@
       </div>
     </div>
 
-    <script src="./app.js?v=20260502-1"></script>
+    <div id="paper-detail-modal" class="paper-detail-modal hidden" aria-live="polite">
+      <div id="paper-detail-backdrop" class="modal-backdrop"></div>
+      <section class="paper-detail-dialog" aria-label="论文详情">
+        <button id="paper-detail-close" class="drawer-close" type="button">×</button>
+        <div id="paper-detail-content"></div>
+      </section>
+    </div>
+
+    <script src="./vendor/simple-math.js?v=20260507-1"></script>
+    <script src="./app.js?v=20260507-1"></script>
   </body>
 </html>

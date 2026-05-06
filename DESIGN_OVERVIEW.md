@@ -164,14 +164,14 @@
 - [`selected_report.py`](selected_report.py)：入选快照（selected 集的全量评分明细、机构、加分扣分占位列、方向汇总）
 - [`reporter.py`](reporter.py)：最终日报（按阈值 + 最小数动态挑选"重点论文"展示；深度简报默认由 Dashboard 按需触发）
 - [`serializers.py`](serializers.py)：前端 JSON 导出（daily / selected / index）
-- [`webapp/`](webapp/)：Dashboard 前端（`Longlist` / `Highlights` / `AI Insights` / `Favorites`），优先读取本地 API，保留静态 JSON fallback
+- [`webapp/`](webapp/)：Dashboard 前端（`Longlist` / `Highlights` / `AI Insights` / `Favorites`），包含任务栏、定时挖掘、配置面板、论文详情抽屉和已读/反馈状态；优先读取本地 API，保留静态 JSON fallback
 
 ### 4.8 本地控制台层
 
 - [`run_dashboard.py`](run_dashboard.py)：一条命令启动本地 Dashboard，并自动打开浏览器。
-- [`server/`](server/)：FastAPI 本地服务，提供 reports / jobs / deep-analysis / favorites API，并托管 `webapp/`。
+- [`server/`](server/)：FastAPI 本地服务，提供 reports / jobs / tasks / schedules / config / papers / feedback / deep-analysis / favorites API，并托管 `webapp/`。
 - [`pipeline/`](pipeline/)：可复用业务流程层，CLI 和 API 共用同一条抓取、筛选、评分、导出链路。
-- [`storage/`](storage/)：SQLite 状态层，当前存储任务、任务日志、AI解读缓存和收藏列表。
+- [`storage/`](storage/)：SQLite 状态层，当前存储任务、任务日志、定时挖掘、配置覆盖、配置变更日志、论文已读/downvote 状态、AI解读缓存和收藏列表。
 
 ### 4.9 基础设施
 
@@ -772,8 +772,14 @@ main.py
 当前本地 API 已支持：
 
 - 页面触发 mining job（抓取 + 筛选 + 机构推断 + 评分 + 报告）
+- Dashboard 内置 scheduler 定时触发 mining job（服务运行时生效，不做离线补跑）
+- 全局任务栏展示 jobs 进度、状态、错误和来源
+- Longlist / Highlights 点击论文打开详情抽屉，展示作者、机构、摘要、comments、评分与操作
+- 论文 read/unread 状态记录在 SQLite，并可在 Longlist 筛选未读
 - 对单篇论文按需触发 AI解读，缓存到 SQLite，并写入 `reports/deep_analysis/<arxiv_id>/deep_analysis.md`
 - 收藏 / 取消收藏论文
+- GUI 配置覆盖写入 SQLite，运行时按 `env > override > config.py default` 解析
+- downvote 需要用户填写理由，由 AI 抽取配置建议，用户确认后才写入配置覆盖
 
 当前的真实导出入口是：
 
