@@ -316,6 +316,15 @@ def list_deep_analysis(date: str = "") -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def delete_deep_analysis(arxiv_id: str, date: str = "") -> bool:
+    with connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM deep_analysis WHERE arxiv_id = ? AND date = ?",
+            (arxiv_id, date or ""),
+        )
+    return cur.rowcount > 0
+
+
 def upsert_favorite(
     arxiv_id: str,
     *,

@@ -57,8 +57,8 @@ body {
 .hero {
   display: grid;
   grid-template-columns: 1.4fr 0.9fr;
-  gap: 28px;
-  padding: 30px;
+  gap: 22px;
+  padding: 24px 26px;
   border: 1px solid var(--border);
   border-radius: 32px;
   background: linear-gradient(135deg, rgba(255, 250, 243, 0.92), rgba(248, 240, 229, 0.78));
@@ -295,15 +295,15 @@ h2 {
 
 .hero-text {
   max-width: 56ch;
-  margin-top: 14px;
-  font-size: 16px;
-  line-height: 1.7;
+  margin-top: 10px;
+  font-size: 15px;
+  line-height: 1.6;
 }
 
 .hero-controls {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
 }
 
 .meta-panel,
@@ -316,14 +316,14 @@ h2 {
 
 .meta-panel {
   display: grid;
-  gap: 12px;
-  padding: 18px;
+  gap: 9px;
+  padding: 15px 16px;
   border-radius: 20px;
 }
 
 .meta-panel strong {
   display: block;
-  margin-top: 4px;
+  margin-top: 2px;
   font-size: 15px;
 }
 
@@ -568,6 +568,18 @@ h2 {
   filter: grayscale(0.35);
 }
 
+.danger-button {
+  border-color: rgba(140, 46, 34, 0.22);
+  background: rgba(255, 239, 235, 0.96);
+  color: #8c2e22;
+}
+
+.danger-button:hover {
+  border-color: rgba(140, 46, 34, 0.34);
+  background: rgba(252, 223, 216, 0.98);
+  color: #6d2410;
+}
+
 .favorite-button.active {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
@@ -621,14 +633,18 @@ h2 {
   display: none;
 }
 
+.section-tabs,
 .tabs {
   display: inline-flex;
   gap: 8px;
   margin-top: 22px;
   padding: 8px;
+  border: 1px solid rgba(100, 68, 26, 0.14);
   border-radius: 999px;
+  background: rgba(255, 250, 244, 0.72);
 }
 
+.section-tab-button,
 .tab-button {
   border: 0;
   padding: 12px 20px;
@@ -641,11 +657,48 @@ h2 {
   transition: transform 180ms ease, background 180ms ease, color 180ms ease;
 }
 
+.section-tab-button {
+  font-weight: 800;
+}
+
+.section-tab-button:hover,
+.section-tab-button.active,
 .tab-button:hover,
 .tab-button.active {
   color: white;
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));
   transform: translateY(-1px);
+}
+
+.section-subtabs {
+  margin-top: 10px;
+}
+
+.tab-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  align-items: flex-start;
+  margin-top: 22px;
+}
+
+.tab-group {
+  display: grid;
+  gap: 8px;
+}
+
+.tab-group-title {
+  margin: 0;
+  padding-left: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.tab-group .section-subtabs {
+  margin-top: 0;
 }
 
 main {
@@ -1561,11 +1614,13 @@ a {
     align-items: start;
   }
 
+  .section-tabs,
   .tabs {
     width: 100%;
     justify-content: space-between;
   }
 
+  .section-tab-button,
   .tab-button {
     flex: 1;
   }

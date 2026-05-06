@@ -5,6 +5,9 @@ const state = {
   index: null,
   apiAvailable: false,
   currentDate: "",
+  currentSection: (window.location.hash === "#deep" || window.location.hash === "#favorites")
+    ? "workspace"
+    : "daily-board",
   currentTab: window.location.hash === "#daily"
     ? "daily"
     : window.location.hash === "#deep"
@@ -40,10 +43,18 @@ const state = {
 
 const el = {
   dateRail: document.getElementById("date-rail"),
+  datePanel: document.getElementById("date-panel"),
+  heroEyebrow: document.getElementById("hero-eyebrow"),
+  heroTitle: document.getElementById("hero-title"),
+  heroText: document.getElementById("hero-text"),
   metaDate: document.getElementById("meta-date"),
+  metaDateLabel: document.getElementById("meta-date-label"),
   metaGeneratedAt: document.getElementById("meta-generated-at"),
+  metaGeneratedAtLabel: document.getElementById("meta-generated-at-label"),
   metaCategories: document.getElementById("meta-categories"),
+  metaCategoriesLabel: document.getElementById("meta-categories-label"),
   metaModels: document.getElementById("meta-models"),
+  metaModelsLabel: document.getElementById("meta-models-label"),
   protocolWarning: document.getElementById("protocol-warning"),
   errorBanner: document.getElementById("error-banner"),
   workspaceBackdrop: document.getElementById("workspace-backdrop"),
@@ -97,6 +108,8 @@ const el = {
   paperDetailBackdrop: document.getElementById("paper-detail-backdrop"),
   paperDetailClose: document.getElementById("paper-detail-close"),
   paperDetailContent: document.getElementById("paper-detail-content"),
+  dailySubtabs: document.getElementById("daily-subtabs"),
+  workspaceSubtabs: document.getElementById("workspace-subtabs"),
   tabButtons: [...document.querySelectorAll(".tab-button")],
   tabPanels: [...document.querySelectorAll(".tab-panel")],
 };
@@ -394,8 +407,19 @@ function updateUrl() {
   window.history.replaceState({}, "", url);
 }
 
+function sectionForTab(tab) {
+  return tab === "deep" || tab === "favorites" ? "workspace" : "daily-board";
+}
+
+function switchSection(section) {
+  state.currentSection = section === "workspace" ? "workspace" : "daily-board";
+  el.datePanel?.classList.toggle("hidden", state.currentSection !== "daily-board");
+  renderMeta();
+}
+
 function switchTab(tab) {
   state.currentTab = tab;
+  switchSection(sectionForTab(tab));
   el.tabButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tab);
   });
@@ -403,6 +427,7 @@ function switchTab(tab) {
     panel.classList.toggle("active", panel.id === `${tab}-tab`);
   });
   updateUrl();
+  renderMeta();
 }
 
 function renderMeta() {
@@ -412,11 +437,31 @@ function renderMeta() {
   const models = state.daily?.models
     ? `${state.daily.models.fast} / ${state.daily.models.strong}`
     : "-";
-
-  el.metaDate.textContent = state.currentDate || "-";
-  el.metaGeneratedAt.textContent = prettyTime(generatedAt);
-  el.metaCategories.textContent = categories.length ? categories.join(", ") : "-";
-  el.metaModels.textContent = models;
+  if (state.currentSection === "daily-board") {
+    el.heroEyebrow.textContent = "Paper Radio Dashboard";
+    el.heroTitle.textContent = "每日论文挖掘看板";
+    el.heroText.textContent = "用一个静态页面同时查看 Highlights 和 Longlist，适合快速扫当日亮点，也方便回看筛选链路。";
+    el.metaDateLabel.textContent = "公布日期";
+    el.metaGeneratedAtLabel.textContent = "数据更新时间";
+    el.metaCategoriesLabel.textContent = "分区";
+    el.metaModelsLabel.textContent = "分析模型";
+    el.metaDate.textContent = state.currentDate || "-";
+    el.metaGeneratedAt.textContent = prettyTime(generatedAt);
+    el.metaCategories.textContent = categories.length ? categories.join(", ") : "-";
+    el.metaModels.textContent = models;
+  } else {
+    el.heroEyebrow.textContent = "Paper Radio Workspace";
+    el.heroTitle.textContent = "研究工作台";
+    el.heroText.textContent = "这里保存跨日期累积的 AI解读和收藏论文，更适合回看、沉淀与个人研究管理。";
+    el.metaDateLabel.textContent = "AI解读数";
+    el.metaGeneratedAtLabel.textContent = "收藏数";
+    el.metaCategoriesLabel.textContent = "最近更新";
+    el.metaModelsLabel.textContent = "当前模型";
+    el.metaDate.textContent = String(state.deepReads.length || 0);
+    el.metaGeneratedAt.textContent = String(state.favorites.length || 0);
+    el.metaCategories.textContent = prettyTime(generatedAt);
+    el.metaModels.textContent = models;
+  }
   if (el.jobStatus && !state.apiAvailable) {
     el.jobStatus.textContent = "当前是静态浏览模式：可以看结果，不能启动任务、AI解读或收藏。";
   }
@@ -856,6 +901,30 @@ async function requestDeepAnalysis(arxivId) {
     pollDeepAnalysis(arxivId);
   } catch (error) {
     showError(`AI解读任务启动失败：${error.message}`);
+  }
+}
+
+async function deleteDeepAnalysis(arxivId, date = "") {
+  if (!state.apiAvailable) {
+    showError("删除 AI解读需要通过本地 Dashboard 服务访问。");
+    return;
+  }
+  const ok = window.confirm(`确认删除 ${arxivId} 的 AI解读吗？这会同时移除对应的报告文件。`);
+  if (!ok) return;
+  try {
+    const query = date ? `?date=${encodeURIComponent(date)}` : "";
+    await apiJson(`/api/deep-analysis/${encodeURIComponent(arxivId)}${query}`, {
+      method: "DELETE",
+    });
+    delete state.deepAnalysis[arxivId];
+    await loadDeepReads();
+    await loadTasks();
+    renderDeepReads();
+    renderTasks();
+    renderDailyDetail();
+    renderSelectedTable();
+  } catch (error) {
+    showError(`删除 AI解读失败：${error.message}`);
   }
 }
 
@@ -1334,11 +1403,19 @@ function renderDeepReads() {
           <span class="tag">${escapeHtml(item.topic_category || "未分类")}</span>
           ${item.total_score !== "" ? `<span class="tag">总分 ${escapeHtml(item.total_score)}</span>` : ""}
           <span class="link-chip">查看报告 ↗</span>
+          <button class="chip-button danger-button" type="button" data-delete-deep-id="${escapeHtml(item.arxiv_id)}" data-delete-deep-date="${escapeHtml(item.date || "")}">删除</button>
         </div>
       </a>
     `;
     })
     .join("");
+  el.deepReadList.querySelectorAll("[data-delete-deep-id]").forEach((node) => {
+    node.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteDeepAnalysis(node.dataset.deleteDeepId, node.dataset.deleteDeepDate || "");
+    });
+  });
   renderMath(el.deepReadList);
 }
 

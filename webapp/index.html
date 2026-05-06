@@ -128,7 +128,7 @@
               <div id="config-list" class="config-list"></div>
             </section>
           </div>
-          <div class="date-panel panel">
+          <div id="date-panel" class="date-panel panel">
             <div id="date-rail" class="date-rail"></div>
           </div>
         </aside>
@@ -136,28 +136,39 @@
         <div class="content-shell">
           <header class="hero">
             <div class="hero-copy">
-              <p class="eyebrow">Paper Radio Dashboard</p>
-              <h1>每日论文挖掘看板</h1>
-              <p class="hero-text">
+              <p id="hero-eyebrow" class="eyebrow">Paper Radio Dashboard</p>
+              <h1 id="hero-title">每日论文挖掘看板</h1>
+              <p id="hero-text" class="hero-text">
                 用一个静态页面同时查看 Highlights 和 Longlist，适合快速扫当日亮点，也方便回看筛选链路。
               </p>
             </div>
             <div class="hero-controls">
               <div class="meta-panel">
-                <div><span class="meta-label">公布日期</span><strong id="meta-date">-</strong></div>
-                <div><span class="meta-label">数据更新时间</span><strong id="meta-generated-at">-</strong></div>
-                <div><span class="meta-label">分区</span><strong id="meta-categories">-</strong></div>
-                <div><span class="meta-label">分析模型</span><strong id="meta-models">-</strong></div>
+                <div><span id="meta-date-label" class="meta-label">公布日期</span><strong id="meta-date">-</strong></div>
+                <div><span id="meta-generated-at-label" class="meta-label">数据更新时间</span><strong id="meta-generated-at">-</strong></div>
+                <div><span id="meta-categories-label" class="meta-label">分区</span><strong id="meta-categories">-</strong></div>
+                <div><span id="meta-models-label" class="meta-label">分析模型</span><strong id="meta-models">-</strong></div>
               </div>
             </div>
           </header>
 
-          <nav class="tabs" aria-label="结果层次切换">
-            <button class="tab-button active" data-tab="selected">Longlist</button>
-            <button class="tab-button" data-tab="daily">Highlights</button>
-            <button class="tab-button" data-tab="deep">AI Insights</button>
-            <button class="tab-button" data-tab="favorites">Favorites</button>
-          </nav>
+          <div class="tab-groups">
+            <section class="tab-group" aria-label="日报视图">
+              <p class="tab-group-title">Daily Board</p>
+              <nav id="daily-subtabs" class="tabs section-subtabs" aria-label="日报层次切换">
+                <button class="tab-button active" data-tab="selected">Longlist</button>
+                <button class="tab-button" data-tab="daily">Highlights</button>
+              </nav>
+            </section>
+
+            <section class="tab-group" aria-label="个人工作台">
+              <p class="tab-group-title">Workspace</p>
+              <nav id="workspace-subtabs" class="tabs section-subtabs" aria-label="工作台层次切换">
+                <button class="tab-button" data-tab="deep">AI Insights</button>
+                <button class="tab-button" data-tab="favorites">Favorites</button>
+              </nav>
+            </section>
+          </div>
 
           <main>
         <section id="selected-tab" class="tab-panel active">

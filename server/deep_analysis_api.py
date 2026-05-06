@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 
 from pipeline.deep_analysis import find_paper_payload, run_deep_analysis_for_paper
-from pipeline.deep_analysis_reports import report_path_for, write_deep_analysis_report
+from pipeline.deep_analysis_reports import report_dir_for, report_path_for, write_deep_analysis_report
 from storage import db
 
 router = APIRouter(prefix="/api/papers", tags=["deep-analysis"])
@@ -106,6 +106,15 @@ def _run_deep_analysis_job(job_id: str, arxiv_id: str, date: str) -> None:
         db.add_job_log(job_id, f"AI解读失败：{exc}", level="error")
 
 
+def _delete_report_artifact(arxiv_id: str) -> None:
+    path = report_path_for(arxiv_id)
+    if path.exists():
+        path.unlink()
+    report_dir = report_dir_for(arxiv_id)
+    if report_dir.exists() and not any(report_dir.iterdir()):
+        report_dir.rmdir()
+
+
 @router.post("/{arxiv_id}/deep-analysis")
 def create_deep_analysis(arxiv_id: str, date: str = Query(default="")):
     cached = db.get_deep_analysis(arxiv_id, date)
@@ -162,3 +171,14 @@ def get_deep_analysis_report(arxiv_id: str, date: str = Query(default="")):
     else:
         payload["report_markdown"] = item.get("analysis_markdown", "")
     return payload
+
+
+@collection_router.delete("/{arxiv_id}")
+def delete_deep_analysis(arxiv_id: str, date: str = Query(default="")):
+    item = db.get_deep_analysis(arxiv_id, date)
+    if not item:
+        raise HTTPException(status_code=404, detail="deep analysis not found")
+    deleted = db.delete_deep_analysis(arxiv_id, date)
+    if deleted:
+        _delete_report_artifact(arxiv_id)
+    return {"ok": deleted, "arxiv_id": arxiv_id, "date": date or ""}
