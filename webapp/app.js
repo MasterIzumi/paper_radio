@@ -437,6 +437,7 @@ function renderMeta() {
   const models = state.daily?.models
     ? `${state.daily.models.fast} / ${state.daily.models.strong}`
     : "-";
+  const metaModelsBlock = el.metaModelsLabel?.parentElement;
   if (state.currentSection === "daily-board") {
     el.heroEyebrow.textContent = "Paper Radio Dashboard";
     el.heroTitle.textContent = "每日论文挖掘看板";
@@ -449,6 +450,7 @@ function renderMeta() {
     el.metaGeneratedAt.textContent = prettyTime(generatedAt);
     el.metaCategories.textContent = categories.length ? categories.join(", ") : "-";
     el.metaModels.textContent = models;
+    metaModelsBlock?.classList.remove("hidden");
   } else {
     el.heroEyebrow.textContent = "Paper Radio Workspace";
     el.heroTitle.textContent = "研究工作台";
@@ -456,11 +458,10 @@ function renderMeta() {
     el.metaDateLabel.textContent = "AI解读数";
     el.metaGeneratedAtLabel.textContent = "收藏数";
     el.metaCategoriesLabel.textContent = "最近更新";
-    el.metaModelsLabel.textContent = "当前模型";
     el.metaDate.textContent = String(state.deepReads.length || 0);
     el.metaGeneratedAt.textContent = String(state.favorites.length || 0);
     el.metaCategories.textContent = prettyTime(generatedAt);
-    el.metaModels.textContent = models;
+    metaModelsBlock?.classList.add("hidden");
   }
   if (el.jobStatus && !state.apiAvailable) {
     el.jobStatus.textContent = "当前是静态浏览模式：可以看结果，不能启动任务、AI解读或收藏。";
